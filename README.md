@@ -1,0 +1,109 @@
+# LLM EvalFlow：大模型问答评测与 Badcase 归因分析平台
+
+这是一个面向 AI 产品经理、问答策略和 Agent 产品岗位的轻量评测平台，支持：
+
+- 评测集管理
+- 多模型回答生成与导入
+- 六维评分
+- Badcase 自动归因
+- Prompt 迭代记录
+- 评测报告生成
+
+## 技术栈
+
+- 后端：FastAPI + SQLModel + SQLite
+- 前端：React + Vite + Recharts
+- 模型调用：OpenAI SDK 兼容接口
+
+## 快速启动
+
+1. 安装后端依赖
+
+```powershell
+cd D:\python\09-07-Albedo\venv\实习项目一\backend
+D:\python\09-07-Albedo\venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+2. 配置模型接口
+
+复制 `backend\.env.example` 为 `backend\.env`，填写：
+
+```text
+LIAOBOTS_API_KEY=你的 API Key
+```
+
+不配置也可以运行，系统会返回模拟回答，方便先看 Demo。
+
+3. 启动后端
+
+```powershell
+cd D:\python\09-07-Albedo\venv\实习项目一\backend
+D:\python\09-07-Albedo\venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+4. 启动前端
+
+```powershell
+cd D:\python\09-07-Albedo\venv\实习项目一\frontend
+npm install
+npm run dev
+```
+
+浏览器打开 `http://127.0.0.1:5173`。
+
+## 数据是否会常驻
+
+本地运行时，评测集、模型回答、评分和 Badcase 都保存在 `backend/llm_evalflow.db` 这个 SQLite 数据库里。电脑重启后数据不会丢，但需要重新启动后端和前端服务才能在浏览器里查看动态页面。
+
+如果要上传到 GitHub 展示，不需要 GitHub 运行 FastAPI。点击左侧「导出 GitHub 展示」后，系统会把当前评测结果导出到：
+
+- `frontend/public/demo-data.json`
+- `docs/evaluation_report.md`
+
+前端在没有后端 API 时会自动读取 `demo-data.json`，因此 GitHub Pages 也能常驻展示已经跑完的评测结果。
+
+## GitHub Pages 展示
+
+你的 GitHub 主页是 `https://github.com/maoqiu77`。建议新建仓库，例如：
+
+```text
+llm-evalflow
+```
+
+上传本项目后，在本地构建静态页面：
+
+```powershell
+cd D:\python\09-07-Albedo\venv\实习项目一\frontend
+npm install
+npm run build
+```
+
+GitHub Pages 可以选择两种方式：
+
+1. 用 GitHub Actions 自动构建 `frontend`。本项目已内置 `.github/workflows/deploy-pages.yml`。
+2. 把 `frontend/dist` 的内容部署到 Pages 分支。
+
+当前项目已设置 `vite.config.js` 的 `base: './'`，适合 GitHub Pages 的子路径部署。
+
+启用 Actions 方式时，到仓库 Settings → Pages，把 Source 选择为 `GitHub Actions`。之后推送到 `main` 分支即可自动发布。
+
+## 推荐演示流程
+
+1. 点击左侧「导入示例数据」。
+2. 进入「模型对比」，选择 Case 和模型，点击「生成回答」。
+3. 对生成回答点击「自动评分」。
+4. 进入「Badcase」查看归因。
+5. 进入「Prompt 迭代」记录优化方案。
+6. 进入「报告」查看自动生成的 Markdown 评测报告。
+7. 点击「导出 GitHub 展示」，生成静态快照后上传 GitHub。
+
+## 可用模型
+
+- deepseek-v4-pro
+- glm-5.1
+- gemini-3.5-flash
+- kimi-k2.6
+- minimax-m2.7
+- gpt-5.4
+- qwen3.7-max
+- claude-sonnet-4-5-20250929-t

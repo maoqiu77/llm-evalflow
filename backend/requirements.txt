@@ -1,0 +1,7 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+greenlet==3.1.1
+sqlmodel==0.0.22
+pydantic-settings==2.7.0
+openai==1.58.1
+python-multipart==0.0.20

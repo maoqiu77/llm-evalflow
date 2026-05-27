@@ -1,0 +1,7 @@
+backend/.env
+backend/llm_evalflow.db
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.playwright-mcp/
