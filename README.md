@@ -55,6 +55,10 @@ npm run dev
 
 本地运行时，评测集、模型回答、评分和 Badcase 都保存在 `backend/llm_evalflow.db` 这个 SQLite 数据库里。电脑重启后数据不会丢，但需要重新启动后端和前端服务才能在浏览器里查看动态页面。
 
+模型回答还会同步到本地回答存档 `backend/model_answer_archive.json`。生成回答时后端会先查这份存档，命中后直接复用历史回答，不再重复调用模型 API；只有新增问题或存档缺失时，才需要在前端「模型对比」页点击「回答新增问题」来调用全部模型生成新回答。生成后可点击「全部自动评分」补齐新回答的评分和 Badcase。
+
+`backend/model_answer_archive.json`、`backend/gemini_summary.json`、`backend/llm_evalflow.db` 都是本地运行产物，已被 `.gitignore` 排除，不会提交到 GitHub。
+
 如果要上传到 GitHub 展示，不需要 GitHub 运行 FastAPI。点击左侧「导出 GitHub 展示」后，系统会把当前评测结果导出到：
 
 - `frontend/public/demo-data.json`
@@ -96,6 +100,10 @@ GitHub Pages 可以选择两种方式：
 5. 进入「Prompt 迭代」记录优化方案。
 6. 进入「报告」查看自动生成的 Markdown 评测报告。
 7. 点击「导出 GitHub 展示」，生成静态快照后上传 GitHub。
+
+## Gemini 总览总结
+
+总览页提供「Gemini 评测总结」区域。点击「生成 Gemini 总结」会调用 `gemini-3.5-flash` 汇总当前全部模型评分、各领域最佳模型、模型缺陷和 Badcase 归因，并把结果缓存到 `backend/gemini_summary.json`。再次打开后会优先读取缓存，只有手动点击按钮才重新调用模型。
 
 ## 可用模型
 

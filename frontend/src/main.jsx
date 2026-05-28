@@ -2,16 +2,23 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   BarChart3,
+  BookOpen,
+  BrainCircuit,
   ClipboardList,
+  Database,
   Download,
   FileText,
   FlaskConical,
+  GitBranch,
   GitCompare,
+  ListChecks,
   Pencil,
+  PlayCircle,
   RefreshCw,
   Search,
   Send,
   Settings2,
+  ShieldCheck,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -54,6 +61,23 @@ const scoreFields = [
   ['user_experience', '用户体验'],
 ];
 
+const guideSteps = [
+  ['1', '评测集', '每条 Case 包含用户问题、场景、难度、标准答案/期望行为和评分维度。'],
+  ['2', '模型回答', '选择单个模型或批量模型生成回答，结果写入本地 SQLite。'],
+  ['3', '自动评分', '评分器会对照问题、标准答案和模型回答，从六个维度输出 1-5 分。'],
+  ['4', 'Badcase 归因', '低总分或任一关键维度低分会进入 Badcase，并记录原因和优化建议。'],
+  ['5', '报告导出', '本地结果可导出为 demo-data.json 和 Markdown 报告，用于 GitHub Pages 静态展示。'],
+];
+
+const guideDimensions = [
+  ['准确性', '是否符合事实和业务约束，是否避免编造实时数据。'],
+  ['完整性', '是否覆盖标准答案中的关键步骤、前置条件和限制。'],
+  ['指令遵循', '是否按用户问题完成任务，没有跑题或擅自改需求。'],
+  ['可执行性', '是否给出用户能实际操作的路径、步骤或下一步。'],
+  ['格式稳定性', '结构是否清晰，批量评测时输出是否便于比较。'],
+  ['用户体验', '语气、风险提示和澄清问题是否符合产品体验。'],
+];
+
 const emptyData = {
   cases: [],
   answers: [],
@@ -62,6 +86,7 @@ const emptyData = {
   prompts: [],
   models: [],
   dashboard: null,
+  analysis_summary: null,
   report: '',
   snapshot_at: '',
 };
@@ -84,6 +109,7 @@ function normalizeSnapshot(snapshot) {
     prompts: snapshot.prompts || [],
     models: snapshot.models || [],
     dashboard: snapshot.dashboard || null,
+    analysis_summary: snapshot.analysis_summary || null,
     report: snapshot.report || '',
     snapshot_at: snapshot.snapshot_at || '',
   };
@@ -116,7 +142,7 @@ function App() {
         await loadSnapshot();
         return;
       }
-      const [cases, answers, scores, badcases, prompts, models, dashboard, report] = await Promise.all([
+      const [cases, answers, scores, badcases, prompts, models, dashboard, analysisSummary, report] = await Promise.all([
         request('/api/cases'),
         request('/api/answers'),
         request('/api/scores'),
@@ -124,9 +150,10 @@ function App() {
         request('/api/prompts'),
         request('/api/models'),
         request('/api/dashboard'),
+        request('/api/analysis/summary'),
         request('/api/report'),
       ]);
-      setData({ cases, answers, scores, badcases, prompts, models: models.models, dashboard, report: report.markdown, snapshot_at: '' });
+      setData({ cases, answers, scores, badcases, prompts, models: models.models, dashboard, analysis_summary: analysisSummary, report: report.markdown, snapshot_at: '' });
       setMode('live');
       setMessage('实时 API 数据');
     } catch (err) {
@@ -161,6 +188,7 @@ function App() {
   const ctx = { data, mode, setMessage, loadAll };
   const tabs = [
     ['dashboard', BarChart3, '总览'],
+    ['guide', BookOpen, '项目逻辑'],
     ['cases', ClipboardList, '评测集'],
     ['compare', GitCompare, '模型对比'],
     ['badcase', FlaskConical, 'Badcase'],
@@ -201,6 +229,7 @@ function App() {
         </header>
         {mode === 'static' && <div className="notice">当前为 GitHub 静态展示模式：结果来自已导出的快照，不能新增问题或重新调用模型。</div>}
         {tab === 'dashboard' && <Dashboard {...ctx} />}
+        {tab === 'guide' && <ProjectGuide data={data} />}
         {tab === 'cases' && <Cases {...ctx} />}
         {tab === 'compare' && <Compare {...ctx} />}
         {tab === 'badcase' && <Badcase {...ctx} />}
@@ -211,7 +240,8 @@ function App() {
   );
 }
 
-function Dashboard({ data }) {
+function Dashboard({ data, mode, setMessage, loadAll }) {
+  const [summarizing, setSummarizing] = useState(false);
   const d = data.dashboard || {};
   const kpis = [
     ['评测 Case', d.case_count || 0],
@@ -220,10 +250,38 @@ function Dashboard({ data }) {
     ['Badcase', d.badcase_count || 0],
     ['平均分', d.avg_score || 0],
   ];
+
+  async function refreshSummary() {
+    if (mode !== 'live') {
+      setMessage('静态模式不能调用 Gemini，请在本地启动 FastAPI 后生成总结');
+      return;
+    }
+    setSummarizing(true);
+    try {
+      const result = await request('/api/analysis/summary', { method: 'POST', body: JSON.stringify({ force_refresh: true }) });
+      setMessage(`已生成 ${result.model} 总结`);
+      loadAll();
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
   return (
     <section className="grid">
       <div className="kpis">
         {kpis.map(([k, v]) => <div className="card metric" key={k}><span>{k}</span><strong>{v}</strong></div>)}
+      </div>
+      <div className="card summaryCard">
+        <div className="summaryHead">
+          <h3><BrainCircuit size={18} /> Gemini 评测总结</h3>
+          <button className="secondary importantAction" onClick={refreshSummary} disabled={summarizing || mode !== 'live'}>
+            {summarizing ? '生成中...' : '生成 Gemini 总结'}
+          </button>
+        </div>
+        <p className="summaryMeta">
+          {data.analysis_summary?.model || 'local-fallback'} / {data.analysis_summary?.generated_at || '未生成'}
+        </p>
+        <pre>{data.analysis_summary?.summary || '暂无总结。点击按钮后会调用 gemini-3.5-flash 分析全部评分、领域表现和 Badcase。'}</pre>
       </div>
       <ChartCard title="各模型平均分" data={d.model_scores || []} useModelAlias />
       <ChartCard title="各场景平均分" data={d.scenario_scores || []} />
@@ -274,6 +332,82 @@ function ChartTooltip({ active, payload }) {
       <b>{item.name}</b>
       <span>平均分：{item.score}</span>
     </div>
+  );
+}
+
+function ProjectGuide({ data }) {
+  const scenarioCounts = data.cases.reduce((acc, item) => {
+    acc[item.scenario] = (acc[item.scenario] || 0) + 1;
+    return acc;
+  }, {});
+  const coreScenarios = ['手机系统使用', '智能家居', '车载语音', '内容生成', '工具调用', '安全合规'];
+
+  return (
+    <section className="guide">
+      <div className="guideHero">
+        <div>
+          <p className="eyebrow">Project Map</p>
+          <h3>这个项目如何运行、评测和展示</h3>
+          <p>本项目是一个本地优先的大模型问答评测台：FastAPI 负责评测数据、模型调用和导出，React 负责配置 Case、对比回答、查看 Badcase 和报告。</p>
+        </div>
+        <div className="runBox">
+          <div><PlayCircle size={18} /> 后端入口</div>
+          <code>uvicorn app.main:app --reload --host 127.0.0.1 --port 8000</code>
+          <small>加载的是 backend/app/main.py 里的 FastAPI app，不是直接 python main.py。</small>
+        </div>
+      </div>
+
+      <div className="guideGrid">
+        <div className="panel">
+          <h3><Database size={18} /> 数据从哪里来</h3>
+          <p>评测集保存在本地 SQLite：backend/llm_evalflow.db。内置示例由 seed 接口写入，也可以在“评测集”页面手动新增或上传 CSV。</p>
+          <div className="scenarioPills">
+            {coreScenarios.map((name) => (
+              <span key={name}>{name}<b>{scenarioCounts[name] || 0}</b></span>
+            ))}
+          </div>
+        </div>
+        <div className="panel">
+          <h3><ListChecks size={18} /> 标准答案怎么来的</h3>
+          <p>标准答案不是模型自动生成的结论，而是评测人员按产品预期手工写出的“期望行为”：应包含哪些步骤、哪些限制不能越界、遇到实时数据或高风险问题时应该如何处理。</p>
+          <p>新增 Case 时，前端的“标准答案或期望行为”字段就是评分参考答案；CSV 导入时对应 expected_answer 列。</p>
+        </div>
+        <div className="panel">
+          <h3><ShieldCheck size={18} /> 如何评估规范性</h3>
+          <p>自动评分会把用户问题、标准答案和模型回答一起交给评审器。配置 API Key 时使用评审模型输出 JSON；未配置或调用失败时，会降级为启发式评分。</p>
+          <p>总分低于 3.5 或任一维度低于 3，会被标记为 Badcase，并沉淀原因和优化建议。</p>
+        </div>
+        <div className="panel">
+          <h3><GitBranch size={18} /> GitHub 展示逻辑</h3>
+          <p>本地调试读实时 API；GitHub Pages 没有后端，所以读取 frontend/public/demo-data.json。点击“导出 GitHub 展示”会同步更新静态快照和 docs/evaluation_report.md。</p>
+        </div>
+      </div>
+
+      <div className="panel flowPanel">
+        <h3>完整流程</h3>
+        <div className="flowSteps">
+          {guideSteps.map(([num, title, text]) => (
+            <div className="flowStep" key={num}>
+              <span>{num}</span>
+              <b>{title}</b>
+              <p>{text}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel dimensionPanel">
+        <h3>六维评分口径</h3>
+        <div className="dimensionGrid">
+          {guideDimensions.map(([name, text]) => (
+            <div key={name}>
+              <b>{name}</b>
+              <p>{text}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -402,6 +536,8 @@ function Compare({ data, mode, loadAll, setMessage }) {
   const selected = data.cases.find((c) => c.id === Number(caseId)) || data.cases[0];
   const answers = data.answers.filter((a) => selected && a.case_id === selected.id);
   const scoresByAnswer = useMemo(() => Object.fromEntries(data.scores.map((s) => [s.answer_id, s])), [data.scores]);
+  const answeredCaseIds = useMemo(() => new Set(data.answers.map((a) => a.case_id)), [data.answers]);
+  const unansweredCaseCount = data.cases.filter((c) => !answeredCaseIds.has(c.id)).length;
 
   async function generate() {
     if (!selected || mode !== 'live') return;
@@ -429,6 +565,30 @@ function Compare({ data, mode, loadAll, setMessage }) {
     }
   }
 
+  async function batchGenerateNewCases() {
+    if (mode !== 'live') return;
+    if (unansweredCaseCount === 0) {
+      setMessage('没有回答覆盖为 0 的新增问题');
+      return;
+    }
+    setBatching(true);
+    try {
+      const result = await request('/api/answers/batch-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          model_names: data.models,
+          replace_mock: false,
+          only_unanswered_cases: true,
+          max_workers: 4,
+        }),
+      });
+      setMessage(`新增问题回答完成：处理 ${result.target_case_count} 个问题，新增 ${result.created} 条回答，跳过旧问题 ${result.skipped_cases} 个，失败 ${result.failed}`);
+      loadAll();
+    } finally {
+      setBatching(false);
+    }
+  }
+
   async function batchScore() {
     if (mode !== 'live') return;
     setBatching(true);
@@ -444,13 +604,23 @@ function Compare({ data, mode, loadAll, setMessage }) {
   return (
     <section>
       <div className="toolbar">
-        <select value={selected?.id || ''} onChange={(e) => setCaseId(e.target.value)}>
-          {data.cases.map((c) => <option value={c.id} key={c.id}>#{c.id} {c.question}</option>)}
-        </select>
-        <select value={model} onChange={(e) => setModel(e.target.value)}>{data.models.map((m) => <option key={m}>{m}</option>)}</select>
+        <label className="fieldControl wide">
+          <span>评测问题</span>
+          <select value={selected?.id || ''} onChange={(e) => setCaseId(e.target.value)}>
+            {data.cases.map((c) => <option value={c.id} key={c.id}>#{c.id} {c.question}</option>)}
+          </select>
+        </label>
+        <label className="fieldControl modelControl">
+          <span>回答模型</span>
+          <select value={model} onChange={(e) => setModel(e.target.value)}>{data.models.map((m) => <option key={m}>{m}</option>)}</select>
+        </label>
         <button onClick={generate} disabled={mode !== 'live'}><Send size={16} /> 生成回答</button>
+        <button className="secondary importantAction" onClick={batchGenerateNewCases} disabled={batching || mode !== 'live' || unansweredCaseCount === 0}>回答新增问题 {unansweredCaseCount}</button>
         <button className="secondary" onClick={batchGenerate} disabled={batching || mode !== 'live'}>全部模型回答</button>
         <button className="secondary" onClick={batchScore} disabled={batching || mode !== 'live'}>全部自动评分</button>
+      </div>
+      <div className="helperBar">
+        “回答新增问题”只处理回答覆盖为 0 的 Case；旧问题继续使用已有答案，不会被重新生成。点击后会对新增问题调用全部模型，请先确认 API Key 和额度。生成完成后可点“全部自动评分”刷新新增回答的评分和 Badcase。
       </div>
       {selected && <div className="reference"><b>期望行为：</b>{selected.expected_answer}</div>}
       <div className="answerGrid">
