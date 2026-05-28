@@ -67,6 +67,8 @@ class BatchGenerateRequest(BaseModel):
     system_prompt: str = ""
     replace_mock: bool = True
     only_unanswered_cases: bool = False
+    auto_score: bool = False
+    judge_model: str = "gpt-5.4"
     max_workers: int = 4
 
 
@@ -502,42 +504,50 @@ def batch_generate_answers(payload: BatchGenerateRequest, session: Session = Dep
     failed = 0
     archive_hits = 0
     for item_result in generated:
-            case_id = item_result["case_id"]
-            model_name = item_result["model_name"]
-            existing = existing_by_key[(case_id, model_name)]
-            answer_text = item_result["answer"]
-            response_time_ms = item_result["response_time_ms"]
-            if item_result["failed"]:
-                failed += 1
-            if item_result.get("archive_hit"):
-                archive_hits += 1
-            if existing:
-                old_scores = session.exec(select(Score).where(Score.answer_id == existing.id)).all()
-                for old_score in old_scores:
-                    old_badcases = session.exec(select(Badcase).where(Badcase.score_id == old_score.id)).all()
-                    for old_badcase in old_badcases:
-                        session.delete(old_badcase)
-                    session.delete(old_score)
-                existing.answer = answer_text
-                existing.response_time_ms = response_time_ms
-                session.add(existing)
-                replaced += 1
-                answer_id = existing.id
-            else:
-                item = ModelAnswer(
-                    case_id=case_id,
-                    model_name=model_name,
-                    prompt_version=payload.prompt_version,
-                    answer=answer_text,
-                    response_time_ms=response_time_ms,
-                )
-                session.add(item)
-                session.commit()
-                session.refresh(item)
-                created += 1
-                answer_id = item.id
+        case_id = item_result["case_id"]
+        model_name = item_result["model_name"]
+        existing = existing_by_key[(case_id, model_name)]
+        answer_text = item_result["answer"]
+        response_time_ms = item_result["response_time_ms"]
+        if item_result["failed"]:
+            failed += 1
+        if item_result.get("archive_hit"):
+            archive_hits += 1
+        if existing:
+            old_scores = session.exec(select(Score).where(Score.answer_id == existing.id)).all()
+            for old_score in old_scores:
+                old_badcases = session.exec(select(Badcase).where(Badcase.score_id == old_score.id)).all()
+                for old_badcase in old_badcases:
+                    session.delete(old_badcase)
+                session.delete(old_score)
+            existing.answer = answer_text
+            existing.response_time_ms = response_time_ms
+            session.add(existing)
+            replaced += 1
+            answer_id = existing.id
+        else:
+            item = ModelAnswer(
+                case_id=case_id,
+                model_name=model_name,
+                prompt_version=payload.prompt_version,
+                answer=answer_text,
+                response_time_ms=response_time_ms,
+            )
+            session.add(item)
             session.commit()
-            results.append({"case_id": case_id, "model_name": model_name, "answer_id": answer_id})
+            session.refresh(item)
+            created += 1
+            answer_id = item.id
+        session.commit()
+        results.append({"case_id": case_id, "model_name": model_name, "answer_id": answer_id})
+
+    score_result = {"created": 0, "skipped": 0, "failed": 0, "badcases": 0}
+    if payload.auto_score:
+        score_result = create_auto_scores(
+            session=session,
+            judge_model=payload.judge_model,
+            only_unscored=True,
+        )
 
     return {
         "case_count": len(cases),
@@ -549,6 +559,7 @@ def batch_generate_answers(payload: BatchGenerateRequest, session: Session = Dep
         "skipped_cases": skipped_cases,
         "archive_hits": archive_hits,
         "failed": failed,
+        "scores": score_result,
         "results": results,
     }
 
@@ -595,6 +606,17 @@ def parse_score_value(value: Any, default: int = 3) -> int:
     return max(1, min(5, parsed))
 
 
+def delete_scores_for_answer(session: Session, answer_id: int) -> None:
+    old_scores = session.exec(select(Score).where(Score.answer_id == answer_id)).all()
+    for old_score in old_scores:
+        old_badcases = session.exec(select(Badcase).where(Badcase.score_id == old_score.id)).all()
+        for old_badcase in old_badcases:
+            session.delete(old_badcase)
+        session.delete(old_score)
+    if old_scores:
+        session.commit()
+
+
 @app.get("/api/scores")
 def list_scores(session: Session = Depends(get_session)) -> list[Score]:
     return session.exec(select(Score).order_by(Score.id.desc())).all()
@@ -604,6 +626,7 @@ def list_scores(session: Session = Depends(get_session)) -> list[Score]:
 def create_score(payload: ScoreCreate, session: Session = Depends(get_session)) -> Score:
     if not session.get(ModelAnswer, payload.answer_id):
         raise HTTPException(status_code=404, detail="回答不存在")
+    delete_scores_for_answer(session, payload.answer_id)
     item = build_score(payload)
     session.add(item)
     session.commit()
@@ -633,6 +656,7 @@ def auto_score(payload: AutoJudgeRequest, session: Session = Depends(get_session
     ))
     if bool(judged.get("is_badcase", score.is_badcase)):
         score.is_badcase = True
+    delete_scores_for_answer(session, answer.id)
     session.add(score)
     session.commit()
     session.refresh(score)
@@ -656,8 +680,12 @@ def auto_score(payload: AutoJudgeRequest, session: Session = Depends(get_session
     return {"score": serialize_score(score), "badcase": badcase.model_dump() if badcase else None}
 
 
-@app.post("/api/scores/batch-auto")
-def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def create_auto_scores(
+    *,
+    session: Session,
+    judge_model: str = "gpt-5.4",
+    only_unscored: bool = True,
+) -> dict[str, Any]:
     answers = session.exec(select(ModelAnswer).order_by(ModelAnswer.id)).all()
     scored_answer_ids = {s.answer_id for s in session.exec(select(Score)).all()}
     case_by_id = {c.id: c for c in session.exec(select(EvalCase)).all()}
@@ -665,7 +693,7 @@ def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_
     skipped = 0
 
     for answer in answers:
-        if payload.only_unscored and answer.id in scored_answer_ids:
+        if only_unscored and answer.id in scored_answer_ids:
             skipped += 1
             continue
         case = case_by_id.get(answer.case_id)
@@ -674,7 +702,7 @@ def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_
 
     def run_judge(answer: ModelAnswer, case: EvalCase) -> dict[str, Any]:
         try:
-            judged = judge_answer(case.question, case.expected_answer, answer.answer, payload.judge_model)
+            judged = judge_answer(case.question, case.expected_answer, answer.answer, judge_model)
         except Exception:
             judged = heuristic_judge(answer.answer)
             judged["reason"] = "自动评审接口调用失败，已降级为启发式评分。"
@@ -694,14 +722,8 @@ def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_
         case = item["case"]
         judged = item["judged"]
         try:
-            if not payload.only_unscored:
-                old_scores = session.exec(select(Score).where(Score.answer_id == answer.id)).all()
-                for old_score in old_scores:
-                    old_badcases = session.exec(select(Badcase).where(Badcase.score_id == old_score.id)).all()
-                    for old_badcase in old_badcases:
-                        session.delete(old_badcase)
-                    session.delete(old_score)
-                session.commit()
+            if not only_unscored:
+                delete_scores_for_answer(session, answer.id)
 
             score = build_score(ScoreCreate(
                 answer_id=answer.id,
@@ -742,6 +764,15 @@ def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_
     return {"answer_count": len(answers), "created": created, "skipped": skipped, "failed": failed, "badcases": badcases}
 
 
+@app.post("/api/scores/batch-auto")
+def batch_auto_score(payload: BatchScoreRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    return create_auto_scores(
+        session=session,
+        judge_model=payload.judge_model,
+        only_unscored=payload.only_unscored,
+    )
+
+
 @app.get("/api/badcases")
 def list_badcases(session: Session = Depends(get_session)) -> list[Badcase]:
     return session.exec(select(Badcase).order_by(Badcase.id.desc())).all()
@@ -779,9 +810,12 @@ def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
 
     score_by_answer = {s.answer_id: s for s in scores}
     case_by_id = {c.id: c for c in cases}
+    answers_by_case: dict[int, list[ModelAnswer]] = defaultdict(list)
+    scored_answer_ids = set(score_by_answer.keys())
     model_scores: dict[str, list[float]] = defaultdict(list)
     scenario_scores: dict[str, list[float]] = defaultdict(list)
     for answer in answers:
+        answers_by_case[answer.case_id].append(answer)
         score = score_by_answer.get(answer.id)
         case = case_by_id.get(answer.case_id)
         if score:
@@ -789,13 +823,32 @@ def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
             if case:
                 scenario_scores[case.scenario].append(score.total_score)
 
+    expected_model_count = len(AVAILABLE_MODELS)
+    completed_case_count = 0
+    unanswered_case_count = 0
+    for case in cases:
+        case_answers = answers_by_case.get(case.id, [])
+        if not case_answers:
+            unanswered_case_count += 1
+            continue
+        answered_models = {answer.model_name for answer in case_answers}
+        all_answers_scored = all(answer.id in scored_answer_ids for answer in case_answers)
+        if len(answered_models) >= expected_model_count and all_answers_scored:
+            completed_case_count += 1
+
     def avg(values: list[float]) -> float:
         return round(sum(values) / len(values), 2) if values else 0
 
     return {
         "case_count": len(cases),
+        "completed_case_count": completed_case_count,
+        "incomplete_case_count": len(cases) - completed_case_count,
+        "unanswered_case_count": unanswered_case_count,
         "answer_count": len(answers),
-        "score_count": len(scores),
+        "score_count": len(scored_answer_ids),
+        "score_record_count": len(scores),
+        "unscored_answer_count": max(0, len(answers) - len(scored_answer_ids)),
+        "expected_score_count": len(cases) * expected_model_count,
         "badcase_count": len(badcases),
         "avg_score": avg([s.total_score for s in scores]),
         "model_scores": [{"name": k, "score": avg(v)} for k, v in model_scores.items()],
@@ -860,7 +913,8 @@ def build_summary_metrics(session: Session) -> dict[str, Any]:
     return {
         "case_count": len(cases),
         "answer_count": len(answers),
-        "score_count": len(scores),
+        "score_count": len(score_by_answer),
+        "score_record_count": len(scores),
         "badcase_count": len(badcases),
         "models": models,
         "scenario_best": sorted(scenario_best, key=lambda item: item["scenario"]),
@@ -1027,7 +1081,8 @@ def export_github_snapshot(
         "ok": True,
         "case_count": len(snapshot["cases"]),
         "answer_count": len(snapshot["answers"]),
-        "score_count": len(snapshot["scores"]),
+        "score_count": snapshot["dashboard"]["score_count"],
+        "score_record_count": len(snapshot["scores"]),
         "badcase_count": len(snapshot["badcases"]),
         "files": files,
     }

@@ -244,9 +244,11 @@ function Dashboard({ data, mode, setMessage, loadAll }) {
   const [summarizing, setSummarizing] = useState(false);
   const d = data.dashboard || {};
   const kpis = [
-    ['评测 Case', d.case_count || 0],
+    ['题库 Case', d.case_count || 0],
+    ['已完成 Case', d.completed_case_count || 0],
     ['模型回答', d.answer_count || 0],
     ['已评分', d.score_count || 0],
+    ['待评分', d.unscored_answer_count || 0],
     ['Badcase', d.badcase_count || 0],
     ['平均分', d.avg_score || 0],
   ];
@@ -557,8 +559,18 @@ function Compare({ data, mode, loadAll, setMessage }) {
     if (mode !== 'live') return;
     setBatching(true);
     try {
-      const result = await request('/api/answers/batch-generate', { method: 'POST', body: JSON.stringify({ model_names: data.models, replace_mock: true, max_workers: 4 }) });
-      setMessage(`批量生成完成：新增 ${result.created}，替换 ${result.replaced}，跳过 ${result.skipped}，失败 ${result.failed}`);
+      const result = await request('/api/answers/batch-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          model_names: data.models,
+          replace_mock: true,
+          auto_score: true,
+          judge_model: 'gpt-5.4',
+          max_workers: 4,
+        }),
+      });
+      const scores = result.scores || {};
+      setMessage(`批量生成完成：新增 ${result.created}，替换 ${result.replaced}，跳过 ${result.skipped}，失败 ${result.failed}；评分新增 ${scores.created || 0}，待评分跳过 ${scores.skipped || 0}，Badcase ${scores.badcases || 0}`);
       loadAll();
     } finally {
       setBatching(false);
@@ -579,22 +591,13 @@ function Compare({ data, mode, loadAll, setMessage }) {
           model_names: data.models,
           replace_mock: false,
           only_unanswered_cases: true,
+          auto_score: true,
+          judge_model: 'gpt-5.4',
           max_workers: 4,
         }),
       });
-      setMessage(`新增问题回答完成：处理 ${result.target_case_count} 个问题，新增 ${result.created} 条回答，跳过旧问题 ${result.skipped_cases} 个，失败 ${result.failed}`);
-      loadAll();
-    } finally {
-      setBatching(false);
-    }
-  }
-
-  async function batchScore() {
-    if (mode !== 'live') return;
-    setBatching(true);
-    try {
-      const result = await request('/api/scores/batch-auto', { method: 'POST', body: JSON.stringify({ judge_model: 'gpt-5.4', only_unscored: true }) });
-      setMessage(`批量评分完成：新增 ${result.created}，跳过 ${result.skipped}，Badcase ${result.badcases}`);
+      const scores = result.scores || {};
+      setMessage(`新增问题回答完成：处理 ${result.target_case_count} 个问题，新增 ${result.created} 条回答，跳过旧问题 ${result.skipped_cases} 个，失败 ${result.failed}；评分新增 ${scores.created || 0}，Badcase ${scores.badcases || 0}`);
       loadAll();
     } finally {
       setBatching(false);
@@ -617,10 +620,9 @@ function Compare({ data, mode, loadAll, setMessage }) {
         <button onClick={generate} disabled={mode !== 'live'}><Send size={16} /> 生成回答</button>
         <button className="secondary importantAction" onClick={batchGenerateNewCases} disabled={batching || mode !== 'live' || unansweredCaseCount === 0}>回答新增问题 {unansweredCaseCount}</button>
         <button className="secondary" onClick={batchGenerate} disabled={batching || mode !== 'live'}>全部模型回答</button>
-        <button className="secondary" onClick={batchScore} disabled={batching || mode !== 'live'}>全部自动评分</button>
       </div>
       <div className="helperBar">
-        “回答新增问题”只处理回答覆盖为 0 的 Case；旧问题继续使用已有答案，不会被重新生成。点击后会对新增问题调用全部模型，请先确认 API Key 和额度。生成完成后可点“全部自动评分”刷新新增回答的评分和 Badcase。
+        “回答新增问题”只处理回答覆盖为 0 的 Case；旧问题继续使用已有答案，不会被重新生成。批量回答完成后会自动补齐未评分回答并刷新 Badcase，请先确认 API Key 和额度。
       </div>
       {selected && <div className="reference"><b>期望行为：</b>{selected.expected_answer}</div>}
       <div className="answerGrid">
