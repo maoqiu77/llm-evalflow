@@ -642,7 +642,13 @@ def auto_score(payload: AutoJudgeRequest, session: Session = Depends(get_session
     case = session.get(EvalCase, answer.case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case 不存在")
-    judged = judge_answer(case.question, case.expected_answer, answer.answer, payload.judge_model)
+    judged = judge_answer(
+        case.question,
+        case.expected_answer,
+        answer.answer,
+        payload.judge_model,
+        answer_model=answer.model_name,
+    )
     score = build_score(ScoreCreate(
         answer_id=answer.id,
         accuracy=parse_score_value(judged.get("accuracy", 3)),
@@ -702,10 +708,16 @@ def create_auto_scores(
 
     def run_judge(answer: ModelAnswer, case: EvalCase) -> dict[str, Any]:
         try:
-            judged = judge_answer(case.question, case.expected_answer, answer.answer, judge_model)
+            judged = judge_answer(
+                case.question,
+                case.expected_answer,
+                answer.answer,
+                judge_model,
+                answer_model=answer.model_name,
+            )
         except Exception:
-            judged = heuristic_judge(answer.answer)
-            judged["reason"] = "自动评审接口调用失败，已降级为启发式评分。"
+            judged = heuristic_judge(case.question, case.expected_answer, answer.answer)
+            judged["reason"] = f"自动评审接口调用失败，已降级为规则化启发式评分。{judged.get('reason', '')}"
         return {"answer": answer, "case": case, "judged": judged}
 
     judged_results = []

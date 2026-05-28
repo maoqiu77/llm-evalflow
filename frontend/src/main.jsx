@@ -64,7 +64,7 @@ const scoreFields = [
 const guideSteps = [
   ['1', '评测集', '每条 Case 包含用户问题、场景、难度、标准答案/期望行为和评分维度。'],
   ['2', '模型回答', '选择单个模型或批量模型生成回答，结果写入本地 SQLite。'],
-  ['3', '自动评分', '评分器会对照问题、标准答案和模型回答，从六个维度输出 1-5 分。'],
+  ['3', '自动评分', '独立评审模型对照问题、期望行为和模型回答打分；明显失败先走硬规则扣分。'],
   ['4', 'Badcase 归因', '低总分或任一关键维度低分会进入 Badcase，并记录原因和优化建议。'],
   ['5', '报告导出', '本地结果可导出为 demo-data.json 和 Markdown 报告，用于 GitHub Pages 静态展示。'],
 ];
@@ -376,8 +376,8 @@ function ProjectGuide({ data }) {
         </div>
         <div className="panel">
           <h3><ShieldCheck size={18} /> 如何评估规范性</h3>
-          <p>自动评分会把用户问题、标准答案和模型回答一起交给评审器。配置 API Key 时使用评审模型输出 JSON；未配置或调用失败时，会降级为启发式评分。</p>
-          <p>总分低于 3.5 或任一维度低于 3，会被标记为 Badcase，并沉淀原因和优化建议。</p>
+          <p>自动评分不是让每个模型自己给自己打分。后端默认用独立评审模型读取用户问题、期望行为和模型回答；如果被评模型与评审模型相同，会自动切换备用评审模型，降低自评偏差。</p>
+          <p>评分前先执行硬规则：调用失败、超时、空回答、只输出工具调用/XML/JSON、需要实时工具却编造结果等，会直接被压低到 1-2 分并标记 Badcase。</p>
         </div>
         <div className="panel">
           <h3><GitBranch size={18} /> GitHub 展示逻辑</h3>
@@ -638,7 +638,22 @@ function Compare({ data, mode, loadAll, setMessage }) {
 }
 
 function ScoreView({ score }) {
-  return <div className="scores">{scoreFields.map(([k, label]) => <span key={k}>{label} {score[k]}</span>)}<strong>总分 {score.total_score}</strong>{score.is_badcase && <b className="danger">Badcase</b>}</div>;
+  return (
+    <div className="scoreBlock">
+      <div className="scores">
+        {scoreFields.map(([k, label]) => <span key={k}>{label} {score[k]}</span>)}
+        <strong>总分 {score.total_score}</strong>
+        {score.is_badcase && <b className="danger">Badcase</b>}
+      </div>
+      {(score.reason || score.suggestion) && (
+        <details className="scoreReason">
+          <summary>评分依据</summary>
+          {score.reason && <p><b>原因：</b>{score.reason}</p>}
+          {score.suggestion && <p><b>建议：</b>{score.suggestion}</p>}
+        </details>
+      )}
+    </div>
+  );
 }
 
 function Badcase({ data }) {

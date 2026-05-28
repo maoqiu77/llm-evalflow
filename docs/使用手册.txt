@@ -7,12 +7,17 @@ LLM EvalFlow 使用手册
 二、核心流程
 1. 维护评测集：录入用户问题、场景标签、难度、期望答案。
 2. 生成模型回答：选择同一个 Case 和不同模型，生成或导入回答。
-3. 自动评分：从准确性、完整性、指令遵循、可执行性、格式稳定性、用户体验六个维度评分。
+3. 自动评分：独立评审模型对照用户问题、期望行为和模型回答，从准确性、完整性、指令遵循、可执行性、格式稳定性、用户体验六个维度评分。
 4. Badcase 归因：低分样本自动进入 Badcase 列表，并标注问题类型和优化建议。
 5. Prompt 迭代：记录 Prompt 版本、修改原因、关联 Badcase 和效果结论。
 6. 报告沉淀：自动生成 Markdown 评测报告，可用于作品集和面试展示。
 
-三、模型 API 配置
+三、评分机制
+自动评分不是模型自己给自己打分。后端默认使用独立评审模型作为裁判；如果被评模型与评审模型相同，会自动切换备用评审模型，降低自评偏差。
+
+评分前会先执行确定性硬规则：调用失败、超时、空回答、只输出工具调用或残缺 JSON/XML、需要实时工具却编造结果等，会直接压低评分并标记 Badcase。通过硬规则后，再由评审模型按六维标准输出评分、原因和优化建议。
+
+四、模型 API 配置
 后端使用 OpenAI SDK 兼容接口。请在 backend/.env 中配置：
 
 LIAOBOTS_BASE_URL=https://ai.liaobots.work/v1
@@ -20,12 +25,12 @@ LIAOBOTS_API_KEY=你的密钥
 
 注意：不要把真实 API Key 提交到公开仓库。
 
-四、CSV 导入格式
+五、CSV 导入格式
 评测集 CSV 至少需要包含 question 和 expected_answer 字段，建议字段如下：
 
 question,scenario,difficulty,expected_answer,source,notes
 
-五、默认数据库
+六、默认数据库
 默认使用 SQLite，数据库文件会生成在 backend/llm_evalflow.db。
 如需 PostgreSQL，可把 DATABASE_URL 改为：
 
@@ -33,7 +38,7 @@ postgresql+psycopg://用户名:密码@localhost:5432/数据库名
 
 同时需要安装相应 PostgreSQL 驱动。
 
-六、面试展示建议
+七、面试展示建议
 建议按以下顺序演示：
 1. 展示 Dashboard，说明评测体系和指标。
 2. 展示评测集，说明场景覆盖。
