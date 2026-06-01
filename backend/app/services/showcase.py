@@ -23,14 +23,14 @@ SCREENSHOTS = [
         "tab": "compare",
         "title": "模型对比",
         "alt": "模型对比截图",
-        "description": "展示同一 Case 下不同模型的回答、自动评分和差异。",
+        "description": "展示同一 Case 下不同模型的回答、评分结果和首屏差异。",
     },
     {
         "slug": "badcase",
         "tab": "badcase",
         "title": "Badcase 归因",
         "alt": "Badcase 归因截图",
-        "description": "展示低分样本、问题类型和优化建议。",
+        "description": "展示低分样本、问题类型和首屏优化建议。",
     },
     {
         "slug": "report",
