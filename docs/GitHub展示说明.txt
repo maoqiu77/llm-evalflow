@@ -27,6 +27,8 @@ docs/evaluation_report.md
 - docs/
 - sample_data/
 - README.md
+- start.sh
+- 启动项目.command
 - start_backend.ps1
 - start_frontend.ps1
 

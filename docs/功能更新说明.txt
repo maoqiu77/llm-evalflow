@@ -37,7 +37,8 @@ Dashboard 中模型横坐标使用短名称，例如 gpt、claude、gemini、qwe
 - 后续可继续引入结构化评分点、人工复核、场景权重、多评审模型交叉评分等机制
 
 6. 启动说明已更新
-README 和 PowerShell 启动脚本已从旧电脑绝对路径改为项目相对路径：
-- 后端：cd backend / python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-- 前端：cd frontend / npm install / npm run dev
+README、运行说明、macOS 双击启动脚本和 PowerShell 启动脚本都已改为项目相对路径或当前机器可直接使用的方式：
+- macOS：可双击 `启动项目.command`，或运行 `bash start.sh`
+- 后端手动启动：cd backend / python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+- 前端手动启动：cd frontend / npm install / npm run dev
 这样项目迁移到新电脑或提交到 GitHub 后仍可直接使用。

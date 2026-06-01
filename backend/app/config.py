@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     liaobots_api_key: str = ""
     liaobots_base_url: str = "https://ai.liaobots.work/v1"
     llm_timeout_seconds: int = 60
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
