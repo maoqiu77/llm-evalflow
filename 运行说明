@@ -27,6 +27,32 @@ npm run dev -- --port 5173
 - 双击 `.command` 启动后，在弹出的终端窗口按 Ctrl+C
 - 停止后按回车可关闭 `.command` 窗口
 
+本地更新 → 导出快照 → 推送云端（最短固定流程）：
+1. 启动项目
+   - 直接双击 `启动项目.command`
+   - 或在项目根目录运行 `bash start.sh`
+2. 在网页里完成本地更新
+   - 例如导入示例数据、增删评测集、生成模型回答、自动评分、查看 Badcase、更新 Prompt 迭代
+3. 点击左侧 `导出 GitHub 展示`
+   - 这一步会刷新静态展示快照
+   - 主要会更新：
+     - `frontend/public/demo-data.json`
+     - `docs/evaluation_report.md`
+     - `docs/screenshots/*.png`（README 顶部关键页面截图）
+4. 推送到 GitHub
+   在终端执行：
+   cd /Users/yaochengzhi/Desktop/实习项目一
+   git add .
+   git commit -m "更新展示快照"
+   git push origin main
+5. 等待 GitHub Pages 自动发布
+   - push 成功后，GitHub Actions 会自动重新构建前端页面
+   - 云端展示会以这次导出的本地快照为准
+
+只改代码、不改展示数据时：
+- 直接 `git add . && git commit -m "你的说明" && git push origin main` 即可
+- 不一定需要点“导出 GitHub 展示”
+
 github 更新：
 手动更新 GitHub 时，可以这样操作：
 cd /Users/yaochengzhi/Desktop/实习项目一

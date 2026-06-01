@@ -1,5 +1,27 @@
 # LLM EvalFlow：大模型问答评测与 Badcase 归因分析平台
 
+<!-- screenshots:start -->
+## 页面预览
+
+以下截图由本地“导出 GitHub 展示”流程自动生成，推送到 GitHub 后会同步显示在仓库首页。
+
+### Dashboard 总览
+展示题库规模、完成进度、模型平均分和 Badcase 分布。
+![Dashboard 总览截图](docs/screenshots/dashboard.png)
+
+### 模型对比
+展示同一 Case 下不同模型的回答、自动评分和差异。
+![模型对比截图](docs/screenshots/compare.png)
+
+### Badcase 归因
+展示低分样本、问题类型和优化建议。
+![Badcase 归因截图](docs/screenshots/badcase.png)
+
+### 评测报告
+展示自动生成的 Markdown 评测报告。
+![评测报告截图](docs/screenshots/report.png)
+<!-- screenshots:end -->
+
 这是一个面向 AI 产品经理、问答策略和 Agent 产品岗位的轻量评测平台，支持：
 
 - 评测集管理
@@ -194,8 +216,9 @@ npm run dev
 
 - `frontend/public/demo-data.json`
 - `docs/evaluation_report.md`
+- `docs/screenshots/*.png`（README 顶部关键页面截图）
 
-前端在没有后端 API 时会自动读取 `demo-data.json`，因此 GitHub Pages 也能常驻展示已经跑完的评测结果。
+前端在没有后端 API 时会自动读取 `demo-data.json`，因此 GitHub Pages 也能常驻展示已经跑完的评测结果；README 也会同步显示最新截图。
 
 ## GitHub Pages 展示
 

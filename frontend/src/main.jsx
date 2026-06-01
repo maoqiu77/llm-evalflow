@@ -181,7 +181,15 @@ function App() {
       setMessage('静态模式不能写入文件，请在本地启动 FastAPI 后导出');
       return;
     }
-    const result = await request('/api/export/github-snapshot', { method: 'POST', body: JSON.stringify({ write_files: true }) });
+    const result = await request('/api/export/github-snapshot', { method: 'POST', body: JSON.stringify({ write_files: true, export_readme_showcase: true }) });
+    if (result.showcase?.ok) {
+      setMessage(`已导出 GitHub 展示数据，并更新 README 截图：${result.answer_count} 条回答，${result.score_count} 条评分`);
+      return;
+    }
+    if (result.showcase?.error) {
+      setMessage(`已导出数据快照，但 README 截图更新失败：${result.showcase.error}`);
+      return;
+    }
     setMessage(`已导出 GitHub 展示数据：${result.answer_count} 条回答，${result.score_count} 条评分`);
   }
 
@@ -381,7 +389,7 @@ function ProjectGuide({ data }) {
         </div>
         <div className="panel">
           <h3><GitBranch size={18} /> GitHub 展示逻辑</h3>
-          <p>本地调试读实时 API；GitHub Pages 没有后端，所以读取 frontend/public/demo-data.json。点击“导出 GitHub 展示”会同步更新静态快照和 docs/evaluation_report.md。</p>
+          <p>本地调试读实时 API；GitHub Pages 没有后端，所以读取 frontend/public/demo-data.json。点击“导出 GitHub 展示”会同步更新静态快照、docs/evaluation_report.md，以及 README 顶部的关键页面截图。</p>
         </div>
       </div>
 

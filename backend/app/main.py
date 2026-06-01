@@ -28,6 +28,7 @@ from .models import (
 )
 from .services.archive import archive_size, get_archived_answer, load_archive, save_archived_answer
 from .services.llm import generate_answer, heuristic_judge, judge_answer
+from .services.showcase import ScreenshotExportError, run_readme_screenshot_export
 
 
 app = FastAPI(title=settings.app_name)
@@ -79,6 +80,7 @@ class BatchScoreRequest(BaseModel):
 
 class ExportSnapshotRequest(BaseModel):
     write_files: bool = True
+    export_readme_showcase: bool = True
 
 
 class SummaryRequest(BaseModel):
@@ -1089,6 +1091,14 @@ def export_github_snapshot(
 ) -> dict[str, Any]:
     snapshot = build_snapshot(session)
     files = write_snapshot_files(snapshot) if payload.write_files else {}
+    showcase = {}
+    if payload.write_files and payload.export_readme_showcase:
+        try:
+            showcase = run_readme_screenshot_export(root_dir=Path(__file__).resolve().parents[2])
+        except ScreenshotExportError as exc:
+            showcase = {"ok": False, "error": str(exc)}
+        else:
+            showcase["ok"] = True
     return {
         "ok": True,
         "case_count": len(snapshot["cases"]),
@@ -1097,6 +1107,7 @@ def export_github_snapshot(
         "score_record_count": len(snapshot["scores"]),
         "badcase_count": len(snapshot["badcases"]),
         "files": files,
+        "showcase": showcase,
     }
 
 
