@@ -118,11 +118,18 @@ def update_readme_screenshot_section(readme_path: Path) -> None:
     if pattern.search(content):
         content = pattern.sub(replacement, content, count=1)
     else:
-        insert_after = "# LLM EvalFlow：大模型问答评测与 Badcase 归因分析平台\n\n"
-        if insert_after in content:
-            content = content.replace(insert_after, insert_after + replacement + "\n\n", 1)
-        else:
-            content = replacement + "\n\n" + content
+        insert_after_candidates = [
+            "- 模型调用：OpenAI SDK 兼容接口\n",
+            "这是一个面向 AI 产品经理、问答策略和 Agent 产品岗位的轻量评测平台，支持：\n",
+        ]
+        inserted = False
+        for marker in insert_after_candidates:
+            if marker in content:
+                content = content.replace(marker, marker + "\n" + replacement + "\n", 1)
+                inserted = True
+                break
+        if not inserted:
+            content = content + "\n\n" + replacement + "\n"
     readme_path.write_text(content, encoding="utf-8")
 
 

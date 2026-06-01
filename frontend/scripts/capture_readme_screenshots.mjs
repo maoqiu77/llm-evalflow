@@ -3,10 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const tabs = [
-  { key: 'dashboard', label: '总览', file: 'dashboard.png', clip: { x: 0, y: 0, width: 1120, height: 760 } },
-  { key: 'compare', label: '模型对比', file: 'compare.png', clip: { x: 0, y: 0, width: 1120, height: 900 } },
-  { key: 'badcase', label: 'Badcase', file: 'badcase.png', clip: { x: 0, y: 0, width: 1120, height: 860 } },
-  { key: 'report', label: '报告', file: 'report.png', clip: { x: 0, y: 0, width: 1120, height: 760 } },
+  { key: 'dashboard', label: '总览', file: 'dashboard.png', clip: { x: 0, y: 0, width: 1120, height: 700 } },
+  { key: 'compare', label: '模型对比', file: 'compare.png', clip: { x: 0, y: 0, width: 1120, height: 680 } },
+  { key: 'badcase', label: 'Badcase', file: 'badcase.png', clip: { x: 0, y: 0, width: 1120, height: 620 } },
+  { key: 'report', label: '报告', file: 'report.png', clip: { x: 0, y: 0, width: 1120, height: 680 } },
 ];
 
 function getArg(name, fallback) {

@@ -10,11 +10,11 @@
 ![Dashboard 总览截图](docs/screenshots/dashboard.png)
 
 ### 模型对比
-展示同一 Case 下不同模型的回答、评分结果和首屏差异。
+展示同一 Case 下不同模型的回答、自动评分和差异。
 ![模型对比截图](docs/screenshots/compare.png)
 
 ### Badcase 归因
-展示低分样本、问题类型和首屏优化建议。
+展示低分样本、问题类型和优化建议。
 ![Badcase 归因截图](docs/screenshots/badcase.png)
 
 ### 评测报告
