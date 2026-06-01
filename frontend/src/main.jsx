@@ -62,7 +62,7 @@ const scoreFields = [
 ];
 
 const guideSteps = [
-  ['1', '评测集', '每条 Case 包含用户问题、场景、难度、标准答案/期望行为和评分维度。'],
+  ['1', '评测集', '每条 Case 包含用户问题、场景、难度、期望行为/评分参考口径和评分维度。'],
   ['2', '模型回答', '选择单个模型或批量模型生成回答，结果写入本地 SQLite。'],
   ['3', '自动评分', '独立评审模型对照问题、期望行为和模型回答打分；明显失败先走硬规则扣分。'],
   ['4', 'Badcase 归因', '低总分或任一关键维度低分会进入 Badcase，并记录原因和优化建议。'],
@@ -71,7 +71,7 @@ const guideSteps = [
 
 const guideDimensions = [
   ['准确性', '是否符合事实和业务约束，是否避免编造实时数据。'],
-  ['完整性', '是否覆盖标准答案中的关键步骤、前置条件和限制。'],
+  ['完整性', '是否覆盖期望行为中的关键步骤、前置条件和限制。'],
   ['指令遵循', '是否按用户问题完成任务，没有跑题或擅自改需求。'],
   ['可执行性', '是否给出用户能实际操作的路径、步骤或下一步。'],
   ['格式稳定性', '结构是否清晰，批量评测时输出是否便于比较。'],
@@ -370,14 +370,14 @@ function ProjectGuide({ data }) {
           </div>
         </div>
         <div className="panel">
-          <h3><ListChecks size={18} /> 标准答案怎么来的</h3>
-          <p>标准答案不是模型自动生成的结论，而是评测人员按产品预期手工写出的“期望行为”：应包含哪些步骤、哪些限制不能越界、遇到实时数据或高风险问题时应该如何处理。</p>
-          <p>新增 Case 时，前端的“标准答案或期望行为”字段就是评分参考答案；CSV 导入时对应 expected_answer 列。</p>
+          <h3><ListChecks size={18} /> 期望行为怎么来的</h3>
+          <p>这里的评分参考不是要求模型逐字匹配某一段“标准答案”，而是评测人员按产品预期手工写出的“期望行为”：应包含哪些步骤、哪些限制不能越界、遇到实时数据或高风险问题时应该如何处理。</p>
+          <p>新增 Case 时，前端填写的是“期望行为或评分参考口径”；CSV 导入时对应 expected_answer 列。它更像评测 Rubric 的简化表达，而不是唯一正确答案。</p>
         </div>
         <div className="panel">
           <h3><ShieldCheck size={18} /> 如何评估规范性</h3>
           <p>自动评分不是让每个模型自己给自己打分。后端默认用独立评审模型读取用户问题、期望行为和模型回答；如果被评模型与评审模型相同，会自动切换备用评审模型，降低自评偏差。</p>
-          <p>评分前先执行硬规则：调用失败、超时、空回答、只输出工具调用/XML/JSON、需要实时工具却编造结果等，会直接被压低到 1-2 分并标记 Badcase。</p>
+          <p>评分前先执行硬规则：调用失败、超时、空回答、只输出工具调用/XML/JSON、需要实时工具却编造结果等，会直接被压低到 1-2 分并标记 Badcase。这样可以避免“语言流畅但事实或能力边界错误”的回答拿到虚高分。</p>
         </div>
         <div className="panel">
           <h3><GitBranch size={18} /> GitHub 展示逻辑</h3>
@@ -395,6 +395,32 @@ function ProjectGuide({ data }) {
               <p>{text}</p>
             </div>
           ))}
+        </div>
+      </div>
+
+      <div className="panel flowPanel">
+        <h3>评测公平性要点</h3>
+        <div className="flowSteps">
+          <div className="flowStep">
+            <span>A</span>
+            <b>同题同口径</b>
+            <p>所有模型面对同一批 Case，并对照同一套期望行为评分，保证横向比较基础一致。</p>
+          </div>
+          <div className="flowStep">
+            <span>B</span>
+            <b>先规则后评审</b>
+            <p>空回答、调用失败、伪工具调用、编造实时结果等明显问题先由硬规则处理，再交给评审模型细分打分。</p>
+          </div>
+          <div className="flowStep">
+            <span>C</span>
+            <b>避免自评偏差</b>
+            <p>当被评模型与评审模型相同，系统自动切换备用评审模型，降低模型“自己给自己打分”的偏差。</p>
+          </div>
+          <div className="flowStep">
+            <span>D</span>
+            <b>结果可复盘</b>
+            <p>每条评分会保留原因和建议，Badcase 会沉淀归因，便于后续 Prompt 与产品策略迭代。</p>
+          </div>
         </div>
       </div>
 
@@ -478,6 +504,7 @@ function Cases({ data, mode, loadAll, setMessage }) {
     <section className="two">
       <form className="panel" onSubmit={submit}>
         <h3>{editingId ? `编辑 Case #${editingId}` : '新增评测 Case'}</h3>
+        <p className="helperBar">这里填写的不是唯一“标准答案”，而是用于评分的期望行为口径：希望模型覆盖哪些关键步骤、限制条件和风险提示。</p>
         <input placeholder="用户问题" value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} required disabled={mode !== 'live'} />
         <div className="row">
           <select value={form.scenario} onChange={(e) => setForm({ ...form, scenario: e.target.value })} disabled={mode !== 'live'}>
@@ -487,7 +514,7 @@ function Cases({ data, mode, loadAll, setMessage }) {
             {DIFFICULTIES.map((x) => <option key={x}>{x}</option>)}
           </select>
         </div>
-        <textarea placeholder="标准答案或期望行为" value={form.expected_answer} onChange={(e) => setForm({ ...form, expected_answer: e.target.value })} required disabled={mode !== 'live'} />
+        <textarea placeholder="期望行为或评分参考口径" value={form.expected_answer} onChange={(e) => setForm({ ...form, expected_answer: e.target.value })} required disabled={mode !== 'live'} />
         <input placeholder="备注，可选" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} disabled={mode !== 'live'} />
         <button disabled={mode !== 'live'}><Send size={16} /> {editingId ? '保存修改' : '保存 Case'}</button>
         {editingId && <button type="button" className="secondary" onClick={() => { setEditingId(null); setForm({ question: '', scenario: '手机系统使用', difficulty: '中', expected_answer: '', notes: '' }); }}>取消编辑</button>}
@@ -499,7 +526,7 @@ function Cases({ data, mode, loadAll, setMessage }) {
           <span>{filtered.length} / {data.cases.length}</span>
         </div>
         <div className="filters">
-          <label><Search size={16} /><input placeholder="搜索问题或标准答案" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+          <label><Search size={16} /><input placeholder="搜索问题或期望行为" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
           <select value={scenario} onChange={(e) => setScenario(e.target.value)}>
             {['全部', ...SCENARIOS].map((x) => <option key={x}>{x}</option>)}
           </select>
@@ -623,6 +650,9 @@ function Compare({ data, mode, loadAll, setMessage }) {
       </div>
       <div className="helperBar">
         “回答新增问题”只处理回答覆盖为 0 的 Case；旧问题继续使用已有答案，不会被重新生成。批量回答完成后会自动补齐未评分回答并刷新 Badcase，请先确认 API Key 和额度。
+      </div>
+      <div className="helperBar">
+        自动评分采用“硬规则 + 独立评审模型”两层机制。这里展示的“期望行为”是评分参考口径，不要求模型逐字匹配，但要求覆盖关键步骤、边界和限制。
       </div>
       {selected && <div className="reference"><b>期望行为：</b>{selected.expected_answer}</div>}
       <div className="answerGrid">

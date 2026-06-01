@@ -8,8 +8,13 @@
 - Badcase 自动归因
 - Prompt 迭代记录
 - 评测报告生成
+- GitHub Pages 静态展示
 
-## 技术栈
+## 核心文档
+
+- [评测方法说明](docs/evaluation_methodology.md)
+- [产品方案 PRD](docs/PRD.txt)
+- [功能更新说明](docs/功能更新说明.txt)
 
 - 后端：FastAPI + SQLModel + SQLite
 - 前端：React + Vite + Recharts
@@ -17,16 +22,59 @@
 
 ## 快速启动
 
-1. 安装后端依赖
+以下命令已经更新为**与当前项目目录无关的通用写法**，不再依赖旧电脑上的绝对路径。
 
-```powershell
-cd D:\python\09-07-Albedo\venv\实习项目一\backend
-D:\python\09-07-Albedo\venv\Scripts\python.exe -m pip install -r requirements.txt
+### 双击启动（最省事）
+
+在 Finder 中直接双击项目根目录里的：
+
+```text
+启动项目.command
 ```
 
-2. 配置模型接口
+它会自动打开终端并执行一键启动脚本。
 
-复制 `backend\.env.example` 为 `backend\.env`，填写：
+如果 macOS 第一次提示安全确认，可以右键 `启动项目.command` → 选择“打开”，确认一次后，后续通常就能直接双击运行。
+
+### 一键启动（推荐）
+
+在项目根目录执行：
+
+```bash
+bash start.sh
+```
+
+脚本会自动：
+
+- 启动后端 `http://127.0.0.1:8000`
+- 启动前端 `http://127.0.0.1:5173`
+- 在按下 `Ctrl+C` 时一起停止前后端
+
+### 停止方式
+
+- 如果是通过 `bash start.sh` 启动：在当前终端按 `Ctrl+C`
+- 如果是通过双击 `启动项目.command` 启动：在弹出的终端窗口按 `Ctrl+C`
+- 停止后，`.command` 窗口会提示“按回车键关闭此窗口”
+
+使用前请确认：
+
+- `backend/.venv` 已创建并安装后端依赖
+- 前端依赖已安装过，或者你已经能在 `frontend` 目录正常运行 `npm run dev`
+
+### 手动启动
+
+### 1. 安装后端依赖
+
+```bash
+cd backend
+python -m pip install -r requirements.txt
+```
+
+如果你的环境里 `python` 指向的不是项目解释器，也可以改成你自己的 Python 可执行文件路径。
+
+### 2. 配置模型接口
+
+复制 `backend/.env.example` 为 `backend/.env`，填写：
 
 ```text
 LIAOBOTS_API_KEY=你的 API Key
@@ -34,17 +82,17 @@ LIAOBOTS_API_KEY=你的 API Key
 
 不配置也可以运行，系统会返回模拟回答，方便先看 Demo。
 
-3. 启动后端
+### 3. 启动后端
 
-```powershell
-cd D:\python\09-07-Albedo\venv\实习项目一\backend
-D:\python\09-07-Albedo\venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```bash
+cd backend
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-4. 启动前端
+### 4. 启动前端
 
-```powershell
-cd D:\python\09-07-Albedo\venv\实习项目一\frontend
+```bash
+cd frontend
 npm install
 npm run dev
 ```
@@ -56,6 +104,78 @@ npm run dev
 本地运行时，评测集、模型回答、评分和 Badcase 都保存在 `backend/llm_evalflow.db` 这个 SQLite 数据库里。电脑重启后数据不会丢，但需要重新启动后端和前端服务才能在浏览器里查看动态页面。
 
 模型回答还会同步到本地回答存档 `backend/model_answer_archive.json`。生成回答时后端会先查这份存档，命中后直接复用历史回答，不再重复调用模型 API；只有新增问题或存档缺失时，才需要在前端「模型对比」页点击「回答新增问题」来调用全部模型生成新回答。批量回答完成后会自动补齐评分和 Badcase。
+
+## 评测逻辑与公平性设计
+
+### 1. “标准答案”并不是唯一文本答案
+
+本项目里的 `expected_answer` 更准确地说是**期望行为 / 评分参考口径**，不是要求模型逐字匹配某一段标准文本。
+
+例如，对于“查天气并提醒我带伞”这类问题，系统关注的不是模型是否复述某一句固定话术，而是：
+
+- 是否识别出这是一个多步骤任务
+- 是否知道需要实时天气查询能力
+- 是否知道提醒创建也需要工具支持
+- 没有工具时是否明确说明限制，而不是编造结果
+
+因此，评测目标是衡量模型是否满足产品预期，而不是做机械文本比对。
+
+### 2. 为什么这些期望行为可以作为评分标准
+
+这些期望行为来自评测人员对真实产品场景的手工定义，依据主要包括：
+
+- 用户任务是否完成
+- 业务流程是否正确
+- 是否覆盖关键步骤和前置条件
+- 是否遵守安全与合规边界
+- 是否避免编造实时信息或超出工具能力边界
+
+也就是说，平台评估的是“这个回答是否符合一个 AI 产品应该给用户的结果”，而不是“它是否和某段参考答案长得像”。
+
+### 3. 得分由谁来评判
+
+自动评分不是让被评模型给自己打分，而是分成两层：
+
+1. **硬规则层**：
+   - 回答为空
+   - 调用失败或超时
+   - 只输出工具调用/XML/JSON
+   - 需要实时工具却编造天气、票务、酒店等结果
+
+   这些情况会被直接压低分数，并优先标记为 Badcase。
+
+2. **独立评审模型层**：
+   正常回答会交给独立评审模型，对照“用户问题 + 期望行为 + 模型回答”进行六维评分。
+
+如果被评模型与评审模型相同，系统会自动切换备用评审模型，降低自评偏差。
+
+### 4. 当前如何提升公平性
+
+目前项目已经做了以下控制：
+
+- 所有模型使用同一批 Case
+- 所有回答使用同一套期望行为口径
+- 统一采用六维评分标准
+- 先规则后评审，避免明显错误被“语言流畅”掩盖
+- 被评模型与评审模型相同时自动切换备用评审模型
+- 每条评分保留原因和优化建议，便于复核
+
+### 5. 当前局限与后续优化方向
+
+为了保持 MVP 简洁，这个版本仍有局限：
+
+- 期望行为仍由人工编写，存在一定主观性
+- 当前默认主要依赖单一评审模型，仍可能有偏差
+- 尚未加入人工复核流转
+- 尚未按场景做维度权重区分
+- 尚未引入多评审模型投票或黄金样本校准
+
+如果继续迭代，优先会补：
+
+- 把“标准答案”进一步结构化为“期望行为 + 关键评分点 + 常见扣分项”
+- 为高风险或高分歧样本增加人工复核
+- 对工具调用、安全合规等高风险场景引入差异化评分权重
+- 增加多评审模型交叉评分和置信度提示
 
 ## 评分机制
 
@@ -79,16 +199,12 @@ npm run dev
 
 ## GitHub Pages 展示
 
-你的 GitHub 主页是 `https://github.com/maoqiu77`。建议新建仓库，例如：
-
-```text
-llm-evalflow
-```
+你的 GitHub 仓库是：`https://github.com/maoqiu77/llm-evalflow`
 
 上传本项目后，在本地构建静态页面：
 
-```powershell
-cd D:\python\09-07-Albedo\venv\实习项目一\frontend
+```bash
+cd frontend
 npm install
 npm run build
 ```

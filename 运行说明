@@ -1,0 +1,41 @@
+运行入口
+后端不需要直接运行某个 .py 文件。正确启动方式优先级如下：
+
+1. 最省事：双击项目根目录里的 `启动项目.command`
+2. 终端一键启动：
+   bash start.sh
+3. 如需排查问题，再手动分别启动前后端
+
+一键启动脚本会自动完成：
+- 启动后端 http://127.0.0.1:8000
+- 启动前端 http://127.0.0.1:5173
+- 按 Ctrl+C 时同时停止前后端
+
+手动启动方式：
+后端：
+cd /Users/yaochengzhi/Desktop/实习项目一/backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+前端：
+cd /Users/yaochengzhi/Desktop/实习项目一/frontend
+export PATH=/Users/yaochengzhi/.local/codex-node/node-v24.14.0-darwin-arm64/bin:$PATH
+npm run dev -- --port 5173
+
+停止方式：
+- `bash start.sh` 启动后，在当前终端按 Ctrl+C
+- 双击 `.command` 启动后，在弹出的终端窗口按 Ctrl+C
+- 停止后按回车可关闭 `.command` 窗口
+
+github 更新：
+手动更新 GitHub 时，可以这样操作：
+cd /Users/yaochengzhi/Desktop/实习项目一
+git status
+git add .
+git commit -m "0601最新优化"
+git pull --rebase origin main
+git push origin main
+
+如需刷新 GitHub Pages 静态展示，先在页面里点击“导出 GitHub 展示”，确保这两个文件是最新的：
+- frontend/public/demo-data.json
+- docs/evaluation_report.md
