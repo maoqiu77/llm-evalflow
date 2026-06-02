@@ -3,11 +3,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const tabs = [
-  { key: 'dashboard', label: '总览', file: 'dashboard.png', clip: { x: 0, y: 0, width: 1120, height: 700 } },
-  { key: 'compare', label: '模型对比', file: 'compare.png', clip: { x: 0, y: 0, width: 1120, height: 680 } },
-  { key: 'badcase', label: 'Badcase', file: 'badcase.png', clip: { x: 0, y: 0, width: 1120, height: 620 } },
-  { key: 'report', label: '报告', file: 'report.png', clip: { x: 0, y: 0, width: 1120, height: 680 } },
+  { key: 'dashboard', label: '总览', file: 'dashboard.png' },
+  { key: 'compare', label: '模型对比', file: 'compare.png' },
+  { key: 'badcase', label: 'Badcase', file: 'badcase.png' },
+  { key: 'report', label: '报告', file: 'report.png' },
 ];
+
+const viewport = { width: 1600, height: 900 };
 
 function getArg(name, fallback) {
   const match = process.argv.find((arg) => arg.startsWith(`${name}=`));
@@ -29,10 +31,20 @@ async function prepareTab(page, tab) {
 async function captureTab(page, tab, outputDir) {
   await prepareTab(page, tab);
   const target = page.locator('.main');
-  await target.screenshot({
+  const box = await target.boundingBox();
+  if (!box) {
+    throw new Error('没有找到截图区域 .main');
+  }
+
+  await page.screenshot({
     path: path.join(outputDir, tab.file),
     animations: 'disabled',
-    clip: tab.clip,
+    clip: {
+      x: Math.floor(box.x),
+      y: Math.floor(box.y),
+      width: Math.floor(Math.min(box.width, viewport.width - box.x)),
+      height: Math.floor(Math.min(viewport.height - box.y, viewport.height)),
+    },
   });
 }
 
@@ -41,7 +53,7 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1600, height: 1200 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
 
   try {
     await waitForApp(page);
