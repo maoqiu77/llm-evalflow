@@ -4,23 +4,30 @@ import {
   BarChart3,
   BookOpen,
   BrainCircuit,
+  CheckSquare,
   ClipboardList,
   Database,
-  Download,
+  Eye,
   FileText,
   FlaskConical,
+  FolderOpen,
   GitBranch,
   GitCompare,
+  KeyRound,
   ListChecks,
   Pencil,
+  Plus,
   PlayCircle,
   RefreshCw,
+  Save,
   Search,
   Send,
   Settings2,
   ShieldCheck,
+  Square,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import {
   Bar,
@@ -89,6 +96,19 @@ const emptyData = {
   analysis_summary: null,
   report: '',
   snapshot_at: '',
+  selection: null,
+  config_summary: null,
+};
+
+const emptyConfig = {
+  base_url: 'https://ai.liaobots.work/v1',
+  has_api_key: false,
+  api_key_mask: '',
+  models: [],
+  default_answer_models: [],
+  default_judge_model: '',
+  summary_model: '',
+  max_workers: 4,
 };
 
 async function request(path, options = {}) {
@@ -101,17 +121,113 @@ async function request(path, options = {}) {
 }
 
 function normalizeSnapshot(snapshot) {
+  const cases = snapshot.cases || [];
+  const answers = snapshot.answers || [];
+  const scores = snapshot.scores || [];
+  const badcases = snapshot.badcases || [];
+  const models = snapshot.models?.length ? snapshot.models : inferModels(answers);
   return {
-    cases: snapshot.cases || [],
-    answers: snapshot.answers || [],
-    scores: snapshot.scores || [],
-    badcases: snapshot.badcases || [],
+    cases,
+    answers,
+    scores,
+    badcases,
     prompts: snapshot.prompts || [],
-    models: snapshot.models || [],
-    dashboard: snapshot.dashboard || null,
+    models,
+    dashboard: snapshot.dashboard || buildDashboardFromSnapshot(cases, answers, scores, badcases, models),
     analysis_summary: snapshot.analysis_summary || null,
     report: snapshot.report || '',
     snapshot_at: snapshot.snapshot_at || '',
+    selection: snapshot.selection || null,
+    config_summary: snapshot.config_summary || null,
+  };
+}
+
+function inferModels(answers) {
+  return [...new Set(answers.map((answer) => answer.model_name).filter(Boolean))];
+}
+
+function numericScore(score, key) {
+  const value = Number(score?.[key]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function totalScore(score) {
+  const direct = Number(score?.total_score);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const values = scoreFields.map(([key]) => numericScore(score, key)).filter((value) => value > 0);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function average(values) {
+  const valid = values.filter((value) => Number.isFinite(value) && value > 0);
+  return valid.length ? Math.round((valid.reduce((sum, value) => sum + value, 0) / valid.length) * 100) / 100 : 0;
+}
+
+function countBy(items, getKey) {
+  const counts = {};
+  items.forEach((item) => {
+    const key = getKey(item);
+    if (!key) return;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return Object.entries(counts).map(([name, count]) => ({ name, count }));
+}
+
+function buildDashboardFromSnapshot(cases, answers, scores, badcases, models) {
+  const caseById = Object.fromEntries(cases.map((item) => [item.id, item]));
+  const scoreByAnswer = Object.fromEntries(scores.map((item) => [item.answer_id, item]));
+  const scoredAnswerIds = new Set(scores.map((item) => item.answer_id));
+  const answersByCase = {};
+  const modelScores = {};
+  const scenarioScores = {};
+
+  answers.forEach((answer) => {
+    answersByCase[answer.case_id] ||= [];
+    answersByCase[answer.case_id].push(answer);
+    const score = scoreByAnswer[answer.id];
+    const scoreValue = totalScore(score);
+    if (!score || !scoreValue) return;
+    modelScores[answer.model_name] ||= [];
+    modelScores[answer.model_name].push(scoreValue);
+    const scenario = caseById[answer.case_id]?.scenario;
+    if (scenario) {
+      scenarioScores[scenario] ||= [];
+      scenarioScores[scenario].push(scoreValue);
+    }
+  });
+
+  const expectedModelCount = models.length || inferModels(answers).length;
+  const completedCaseCount = cases.filter((item) => {
+    const caseAnswers = answersByCase[item.id] || [];
+    if (!caseAnswers.length) return false;
+    const answeredModels = new Set(caseAnswers.map((answer) => answer.model_name));
+    return answeredModels.size >= expectedModelCount && caseAnswers.every((answer) => scoredAnswerIds.has(answer.id));
+  }).length;
+
+  return {
+    case_count: cases.length,
+    completed_case_count: completedCaseCount,
+    incomplete_case_count: cases.length - completedCaseCount,
+    unanswered_case_count: cases.filter((item) => !(answersByCase[item.id] || []).length).length,
+    answer_count: answers.length,
+    score_count: scoredAnswerIds.size,
+    score_record_count: scores.length,
+    unscored_answer_count: Math.max(0, answers.length - scoredAnswerIds.size),
+    expected_score_count: cases.length * expectedModelCount,
+    badcase_count: badcases.length,
+    avg_score: average(scores.map(totalScore)),
+    model_scores: Object.entries(modelScores).map(([name, values]) => ({ name, score: average(values) })),
+    scenario_scores: Object.entries(scenarioScores).map(([name, values]) => ({ name, score: average(values) })),
+    badcase_types: countBy(badcases, (item) => item.badcase_type),
+  };
+}
+
+function configFromSnapshot(normalized) {
+  return {
+    ...emptyConfig,
+    models: normalized.models,
+    default_answer_models: normalized.models.slice(0, 2),
+    default_judge_model: normalized.selection?.judge_model || normalized.models[0] || '',
   };
 }
 
@@ -122,15 +238,20 @@ function modelLabel(name) {
 function App() {
   const [tab, setTab] = useState('dashboard');
   const [data, setData] = useState(emptyData);
+  const [config, setConfig] = useState(emptyConfig);
+  const [lastRun, setLastRun] = useState(null);
   const [mode, setMode] = useState('live');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   async function loadSnapshot() {
     const res = await fetch('demo-data.json', { cache: 'no-store' });
-    if (!res.ok) throw new Error('没有找到 demo-data.json，请先在本地导出 GitHub 展示快照');
+    if (!res.ok) throw new Error('没有找到 demo-data.json，请上传评测结果 snapshot.json');
     const snapshot = await res.json();
-    setData(normalizeSnapshot(snapshot));
+    const normalized = normalizeSnapshot(snapshot);
+    setData(normalized);
+    setConfig(configFromSnapshot(normalized));
+    setLastRun(null);
     setMode('static');
     setMessage(`静态快照：${snapshot.snapshot_at || '已加载'}`);
   }
@@ -142,18 +263,19 @@ function App() {
         await loadSnapshot();
         return;
       }
-      const [cases, answers, scores, badcases, prompts, models, dashboard, analysisSummary, report] = await Promise.all([
+      const [configResult, cases, answers, scores, badcases, prompts, dashboard, analysisSummary, report] = await Promise.all([
+        request('/api/config'),
         request('/api/cases'),
         request('/api/answers'),
         request('/api/scores'),
         request('/api/badcases'),
         request('/api/prompts'),
-        request('/api/models'),
         request('/api/dashboard'),
         request('/api/analysis/summary'),
         request('/api/report'),
       ]);
-      setData({ cases, answers, scores, badcases, prompts, models: models.models, dashboard, analysis_summary: analysisSummary, report: report.markdown, snapshot_at: '' });
+      setConfig(configResult);
+      setData({ cases, answers, scores, badcases, prompts, models: configResult.models || [], dashboard, analysis_summary: analysisSummary, report: report.markdown, snapshot_at: '', selection: null, config_summary: null });
       setMode('live');
       setMessage('实时 API 数据');
     } catch (err) {
@@ -170,32 +292,37 @@ function App() {
 
   useEffect(() => { loadAll(); }, []);
 
-  async function seed() {
-    await request('/api/seed', { method: 'POST' });
-    setMessage('已写入示例评测集');
-    loadAll();
+  function applyUploadedSnapshot(snapshot, filename = 'snapshot.json') {
+    if (!Array.isArray(snapshot.cases) || !Array.isArray(snapshot.answers)) {
+      throw new Error('不是有效的评测结果 snapshot.json');
+    }
+    const normalized = normalizeSnapshot(snapshot);
+    setData(normalized);
+    setConfig(configFromSnapshot(normalized));
+    setMode('uploaded');
+    setLastRun(null);
+    setTab('dashboard');
+    setMessage(`已加载评测结果：${filename}`);
   }
 
-  async function exportSnapshot() {
-    if (mode !== 'live') {
-      setMessage('静态模式不能写入文件，请在本地启动 FastAPI 后导出');
-      return;
+  async function uploadResultFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      applyUploadedSnapshot(JSON.parse(await file.text()), file.name);
+    } catch (err) {
+      setMessage(`上传失败：${err.message}`);
+    } finally {
+      e.target.value = '';
     }
-    const result = await request('/api/export/github-snapshot', { method: 'POST', body: JSON.stringify({ write_files: true, export_readme_showcase: true }) });
-    if (result.showcase?.ok) {
-      setMessage(`已导出 GitHub 展示数据，并更新 README 截图：${result.answer_count} 条回答，${result.score_count} 条评分`);
-      return;
-    }
-    if (result.showcase?.error) {
-      setMessage(`已导出数据快照，但 README 截图更新失败：${result.showcase.error}`);
-      return;
-    }
-    setMessage(`已导出 GitHub 展示数据：${result.answer_count} 条回答，${result.score_count} 条评分`);
   }
 
-  const ctx = { data, mode, setMessage, loadAll };
+  const ctx = { data, config, mode, lastRun, setConfig, setMessage, setLastRun, setTab, loadAll, applyUploadedSnapshot };
   const tabs = [
     ['dashboard', BarChart3, '总览'],
+    ['config', KeyRound, '配置'],
+    ['run', PlayCircle, '运行评测'],
+    ['results', FolderOpen, '结果中心'],
     ['guide', BookOpen, '项目逻辑'],
     ['cases', ClipboardList, '评测集'],
     ['compare', GitCompare, '模型对比'],
@@ -221,8 +348,7 @@ function App() {
             </button>
           ))}
         </nav>
-        <button className="secondary" onClick={seed} disabled={mode !== 'live'}><Upload size={16} /> 导入示例数据</button>
-        <button className="secondary" onClick={exportSnapshot} disabled={mode !== 'live'}><Download size={16} /> 导出 GitHub 展示</button>
+        <label className={`secondary file sidebarUpload ${loading ? 'disabled' : ''}`}><Upload size={16} /> 上传评测结果<input type="file" accept=".json,application/json" onChange={uploadResultFile} disabled={loading} /></label>
         <button className="secondary" onClick={loadAll}><RefreshCw size={16} /> 刷新数据</button>
       </aside>
       <main className="main">
@@ -231,12 +357,15 @@ function App() {
             <p className="eyebrow">AI Product Workflow</p>
             <h2>{tabs.find((x) => x[0] === tab)?.[2]}</h2>
           </div>
-          <div className={`status ${mode === 'static' ? 'snapshot' : ''}`}>
+          <div className={`status ${mode !== 'live' ? 'snapshot' : ''}`}>
             {loading ? '同步中...' : message || 'FastAPI + React + SQLite'}
           </div>
         </header>
-        {mode === 'static' && <div className="notice">当前为 GitHub 静态展示模式：结果来自已导出的快照，不能新增问题或重新调用模型。</div>}
+        {mode !== 'live' && <div className="notice">当前为只读快照模式：结果来自已导出的文件，不能新增问题或重新调用模型。</div>}
         {tab === 'dashboard' && <Dashboard {...ctx} />}
+        {tab === 'config' && <ConfigPanel {...ctx} />}
+        {tab === 'run' && <RunEvaluation {...ctx} />}
+        {tab === 'results' && <ResultsCenter {...ctx} />}
         {tab === 'guide' && <ProjectGuide data={data} />}
         {tab === 'cases' && <Cases {...ctx} />}
         {tab === 'compare' && <Compare {...ctx} />}
@@ -245,6 +374,411 @@ function App() {
         {tab === 'report' && <Report {...ctx} />}
       </main>
     </div>
+  );
+}
+
+function ConfigPanel({ config, mode, setConfig, setMessage }) {
+  const [baseUrl, setBaseUrl] = useState(config.base_url || '');
+  const [apiKey, setApiKey] = useState('');
+  const [clearApiKey, setClearApiKey] = useState(false);
+  const [models, setModels] = useState(config.models || []);
+  const [newModel, setNewModel] = useState('');
+  const [defaultAnswerModels, setDefaultAnswerModels] = useState(config.default_answer_models || []);
+  const [defaultJudgeModel, setDefaultJudgeModel] = useState(config.default_judge_model || '');
+  const [summaryModel, setSummaryModel] = useState(config.summary_model || '');
+  const [maxWorkers, setMaxWorkers] = useState(config.max_workers || 4);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    setBaseUrl(config.base_url || '');
+    setModels(config.models || []);
+    setDefaultAnswerModels(config.default_answer_models || []);
+    setDefaultJudgeModel(config.default_judge_model || '');
+    setSummaryModel(config.summary_model || '');
+    setMaxWorkers(config.max_workers || 4);
+  }, [config.base_url, config.models, config.default_answer_models, config.default_judge_model, config.summary_model, config.max_workers]);
+
+  function addModel() {
+    const model = newModel.trim();
+    if (!model || models.includes(model)) return;
+    setModels((items) => [...items, model]);
+    setDefaultAnswerModels((items) => items.length ? items : [model]);
+    if (!defaultJudgeModel) setDefaultJudgeModel(model);
+    if (!summaryModel) setSummaryModel(model);
+    setNewModel('');
+  }
+
+  function removeModel(model) {
+    if (models.length <= 1) return;
+    const nextModels = models.filter((item) => item !== model);
+    setModels(nextModels);
+    setDefaultAnswerModels((items) => items.filter((item) => item !== model));
+    if (defaultJudgeModel === model) setDefaultJudgeModel(nextModels[0] || '');
+    if (summaryModel === model) setSummaryModel(nextModels[0] || '');
+  }
+
+  function toggleDefaultAnswer(model) {
+    setDefaultAnswerModels((items) => items.includes(model) ? items.filter((item) => item !== model) : [...items, model]);
+  }
+
+  async function saveConfig(e) {
+    e.preventDefault();
+    if (mode !== 'live') return;
+    const payload = {
+      base_url: baseUrl,
+      clear_api_key: clearApiKey,
+      models,
+      default_answer_models: defaultAnswerModels,
+      default_judge_model: defaultJudgeModel,
+      summary_model: summaryModel,
+      max_workers: Number(maxWorkers) || 4,
+    };
+    if (apiKey.trim()) payload.api_key = apiKey.trim();
+    const saved = await request('/api/config', { method: 'PUT', body: JSON.stringify(payload) });
+    setConfig(saved);
+    setApiKey('');
+    setClearApiKey(false);
+    setMessage(`配置已保存到本地：${saved.api_key_mask ? `密钥 ${saved.api_key_mask}` : '未保存密钥'}`);
+  }
+
+  async function testConnection() {
+    if (mode !== 'live') return;
+    setTesting(true);
+    try {
+      const result = await request('/api/config/test', {
+        method: 'POST',
+        body: JSON.stringify({
+          base_url: baseUrl,
+          api_key: apiKey.trim() || undefined,
+          model: defaultJudgeModel || models[0] || '',
+        }),
+      });
+      setMessage(`连接成功：${result.model} ${result.message || ''}`);
+    } catch (err) {
+      setMessage(`连接失败：${err.message}`);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <section className="configGrid">
+      <form className="panel configPanel" onSubmit={saveConfig}>
+        <h3><KeyRound size={18} /> 接口配置</h3>
+        <label className="fieldControl">
+          <span>Base URL</span>
+          <input type="url" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} disabled={mode !== 'live'} required />
+        </label>
+        <label className="fieldControl">
+          <span>API Key {config.has_api_key && config.api_key_mask ? `（已保存 ${config.api_key_mask}）` : ''}</span>
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={config.has_api_key ? '留空则继续使用已保存密钥' : '输入后保存到 backend/.env'} disabled={mode !== 'live'} />
+        </label>
+        <label className="checkLine">
+          <input type="checkbox" checked={clearApiKey} onChange={(e) => setClearApiKey(e.target.checked)} disabled={mode !== 'live'} />
+          <span>保存时清除已保存密钥</span>
+        </label>
+        <div className="buttonRow">
+          <button disabled={mode !== 'live'}><Save size={16} /> 保存配置</button>
+          <button type="button" className="secondary" onClick={testConnection} disabled={testing || mode !== 'live'}><ShieldCheck size={16} /> {testing ? '测试中...' : '测试连接'}</button>
+        </div>
+      </form>
+
+      <div className="panel configPanel">
+        <h3><Settings2 size={18} /> 模型收藏</h3>
+        <div className="modelAdd">
+          <input placeholder="输入模型名" value={newModel} onChange={(e) => setNewModel(e.target.value)} disabled={mode !== 'live'} />
+          <button type="button" onClick={addModel} disabled={mode !== 'live'}><Plus size={16} /> 添加</button>
+        </div>
+        <div className="modelList">
+          {models.map((model) => (
+            <div className="modelChip" key={model}>
+              <span>{model}</span>
+              <button type="button" className="iconBtn dangerBtn" onClick={() => removeModel(model)} disabled={mode !== 'live' || models.length <= 1} title="删除模型"><X size={14} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <form className="panel configPanel wideConfig" onSubmit={saveConfig}>
+        <h3><ListChecks size={18} /> 默认运行参数</h3>
+        <div className="checkboxGrid">
+          {models.map((model) => (
+            <label key={model} className="checkLine">
+              <input type="checkbox" checked={defaultAnswerModels.includes(model)} onChange={() => toggleDefaultAnswer(model)} disabled={mode !== 'live'} />
+              <span>{model}</span>
+            </label>
+          ))}
+        </div>
+        <div className="row">
+          <label className="fieldControl">
+            <span>默认评审模型</span>
+            <select value={defaultJudgeModel} onChange={(e) => setDefaultJudgeModel(e.target.value)} disabled={mode !== 'live'}>
+              {models.map((model) => <option key={model}>{model}</option>)}
+            </select>
+          </label>
+          <label className="fieldControl">
+            <span>总结模型</span>
+            <select value={summaryModel} onChange={(e) => setSummaryModel(e.target.value)} disabled={mode !== 'live'}>
+              {models.map((model) => <option key={model}>{model}</option>)}
+            </select>
+          </label>
+          <label className="fieldControl smallControl">
+            <span>并发数</span>
+            <input type="number" min="1" max="8" value={maxWorkers} onChange={(e) => setMaxWorkers(e.target.value)} disabled={mode !== 'live'} />
+          </label>
+        </div>
+        <button disabled={mode !== 'live'}><Save size={16} /> 保存默认参数</button>
+      </form>
+    </section>
+  );
+}
+
+function RunEvaluation({ data, config, mode, loadAll, setMessage, setLastRun, setTab }) {
+  const [query, setQuery] = useState('');
+  const [scenario, setScenario] = useState('全部');
+  const [difficulty, setDifficulty] = useState('全部');
+  const [selectedCaseIds, setSelectedCaseIds] = useState([]);
+  const [answerModels, setAnswerModels] = useState([]);
+  const [judgeModel, setJudgeModel] = useState('');
+  const [running, setRunning] = useState(false);
+  const [newCase, setNewCase] = useState({ question: '', scenario: '通用问答', difficulty: '中', expected_answer: '', notes: '' });
+
+  const modelKey = (config.models || []).join('|');
+  const defaultAnswerKey = (config.default_answer_models || []).join('|');
+
+  useEffect(() => {
+    const available = config.models || [];
+    setAnswerModels((items) => {
+      const valid = items.filter((item) => available.includes(item));
+      if (valid.length) return valid;
+      return (config.default_answer_models || []).filter((item) => available.includes(item));
+    });
+    setJudgeModel((current) => current && available.includes(current) ? current : (config.default_judge_model || available[0] || ''));
+  }, [modelKey, defaultAnswerKey, config.default_judge_model]);
+
+  const filteredCases = useMemo(() => data.cases.filter((item) => {
+    const text = `${item.question} ${item.expected_answer}`.toLowerCase();
+    const matchText = text.includes(query.toLowerCase());
+    const matchScenario = scenario === '全部' || item.scenario === scenario;
+    const matchDifficulty = difficulty === '全部' || item.difficulty === difficulty;
+    return matchText && matchScenario && matchDifficulty;
+  }), [data.cases, query, scenario, difficulty]);
+
+  const selectedSet = useMemo(() => new Set(selectedCaseIds), [selectedCaseIds]);
+
+  function toggleCase(caseId) {
+    setSelectedCaseIds((items) => items.includes(caseId) ? items.filter((id) => id !== caseId) : [...items, caseId]);
+  }
+
+  function toggleAnswerModel(model) {
+    setAnswerModels((items) => items.includes(model) ? items.filter((item) => item !== model) : [...items, model]);
+  }
+
+  async function addCustomCase(e) {
+    e.preventDefault();
+    if (mode !== 'live') return;
+    const created = await request('/api/cases', { method: 'POST', body: JSON.stringify(newCase) });
+    setSelectedCaseIds((items) => [...new Set([...items, created.id])]);
+    setNewCase({ question: '', scenario: '通用问答', difficulty: '中', expected_answer: '', notes: '' });
+    setMessage(`已新增并选中 Case #${created.id}`);
+    loadAll();
+  }
+
+  async function runEvaluation() {
+    if (mode !== 'live') return;
+    if (!selectedCaseIds.length) {
+      setMessage('请至少选择一个评测问题');
+      return;
+    }
+    if (!answerModels.length) {
+      setMessage('请至少选择一个回答模型');
+      return;
+    }
+    if (!judgeModel) {
+      setMessage('请先选择评审模型');
+      return;
+    }
+    setRunning(true);
+    try {
+      const result = await request('/api/answers/batch-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          case_ids: selectedCaseIds,
+          model_names: answerModels,
+          replace_mock: true,
+          auto_score: true,
+          judge_model: judgeModel,
+          max_workers: config.max_workers || 4,
+        }),
+      });
+      const run = {
+        case_ids: selectedCaseIds,
+        model_names: answerModels,
+        judge_model: judgeModel,
+        result,
+        finished_at: new Date().toISOString(),
+      };
+      setLastRun(run);
+      await loadAll();
+      const scores = result.scores || {};
+      setMessage(`评测完成：回答新增 ${result.created}，替换 ${result.replaced}，失败 ${result.failed}；评分新增 ${scores.created || 0}，Badcase ${scores.badcases || 0}`);
+      setTab('results');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <section className="runLayout">
+      <div className="panel runPanel">
+        <div className="tableHead">
+          <h3><ClipboardList size={18} /> 选择问题</h3>
+          <span>{selectedCaseIds.length} / {data.cases.length}</span>
+        </div>
+        <div className="filters tripleFilters">
+          <label><Search size={16} /><input placeholder="搜索问题或期望行为" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+          <select value={scenario} onChange={(e) => setScenario(e.target.value)}>
+            {['全部', ...SCENARIOS].map((item) => <option key={item}>{item}</option>)}
+          </select>
+          <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
+            {['全部', ...DIFFICULTIES].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+        <div className="buttonRow">
+          <button type="button" className="secondary" onClick={() => setSelectedCaseIds(data.cases.map((item) => item.id))}><CheckSquare size={16} /> 全部</button>
+          <button type="button" className="secondary" onClick={() => setSelectedCaseIds(filteredCases.map((item) => item.id))}><Eye size={16} /> 当前筛选</button>
+          <button type="button" className="secondary" onClick={() => setSelectedCaseIds([])}><Square size={16} /> 清空</button>
+        </div>
+        <div className="casePicker">
+          {filteredCases.map((item) => (
+            <button type="button" className={`casePick ${selectedSet.has(item.id) ? 'selected' : ''}`} key={item.id} onClick={() => toggleCase(item.id)}>
+              <span>#{item.id} {item.scenario} / {item.difficulty}</span>
+              <b>{item.question}</b>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="sideStack">
+        <form className="panel runPanel" onSubmit={addCustomCase}>
+          <h3><Plus size={18} /> 自创问题</h3>
+          <input placeholder="用户问题" value={newCase.question} onChange={(e) => setNewCase({ ...newCase, question: e.target.value })} required disabled={mode !== 'live'} />
+          <div className="row">
+            <select value={newCase.scenario} onChange={(e) => setNewCase({ ...newCase, scenario: e.target.value })} disabled={mode !== 'live'}>
+              {SCENARIOS.map((item) => <option key={item}>{item}</option>)}
+            </select>
+            <select value={newCase.difficulty} onChange={(e) => setNewCase({ ...newCase, difficulty: e.target.value })} disabled={mode !== 'live'}>
+              {DIFFICULTIES.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </div>
+          <textarea placeholder="期望行为或评分参考口径" value={newCase.expected_answer} onChange={(e) => setNewCase({ ...newCase, expected_answer: e.target.value })} required disabled={mode !== 'live'} />
+          <button disabled={mode !== 'live'}><Send size={16} /> 新增并选中</button>
+        </form>
+
+        <div className="panel runPanel">
+          <h3><BrainCircuit size={18} /> 选择模型</h3>
+          <div className="checkboxGrid compactChecks">
+            {(config.models || []).map((model) => (
+              <label className="checkLine" key={model}>
+                <input type="checkbox" checked={answerModels.includes(model)} onChange={() => toggleAnswerModel(model)} disabled={mode !== 'live'} />
+                <span>{model}</span>
+              </label>
+            ))}
+          </div>
+          <label className="fieldControl">
+            <span>评审模型</span>
+            <select value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)} disabled={mode !== 'live'}>
+              {(config.models || []).map((model) => <option key={model}>{model}</option>)}
+            </select>
+          </label>
+          <button className="runButton" onClick={runEvaluation} disabled={running || mode !== 'live'}><PlayCircle size={17} /> {running ? '评测中...' : '开始评测'}</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ResultsCenter({ data, config, mode, lastRun, setMessage, applyUploadedSnapshot }) {
+  const [saving, setSaving] = useState(false);
+  const selection = lastRun || data.selection || null;
+  const selectedCaseCount = selection?.case_ids?.length || data.cases.length;
+  const selectedModelCount = selection?.model_names?.length || data.models.length;
+  const visibleAnswers = useMemo(() => {
+    if (!selection?.case_ids?.length && !selection?.model_names?.length) return data.answers;
+    const caseSet = new Set(selection.case_ids || []);
+    const modelSet = new Set(selection.model_names || []);
+    return data.answers.filter((answer) => (
+      (!caseSet.size || caseSet.has(answer.case_id)) &&
+      (!modelSet.size || modelSet.has(answer.model_name))
+    ));
+  }, [data.answers, selection]);
+  const visibleAnswerIds = useMemo(() => new Set(visibleAnswers.map((answer) => answer.id)), [visibleAnswers]);
+  const visibleScores = useMemo(() => data.scores.filter((score) => visibleAnswerIds.has(score.answer_id)), [data.scores, visibleAnswerIds]);
+  const visibleBadcases = useMemo(() => data.badcases.filter((badcase) => visibleAnswerIds.has(badcase.answer_id)), [data.badcases, visibleAnswerIds]);
+
+  async function saveResult() {
+    if (mode !== 'live') return;
+    const target = lastRun || {
+      case_ids: data.cases.map((item) => item.id),
+      model_names: data.models,
+      judge_model: config.default_judge_model,
+      result: {},
+    };
+    setSaving(true);
+    try {
+      const result = await request('/api/results/save', {
+        method: 'POST',
+        body: JSON.stringify({
+          case_ids: target.case_ids,
+          model_names: target.model_names,
+          judge_model: target.judge_model,
+          run_result: target.result || {},
+        }),
+      });
+      setMessage(`已保留到本地：${result.files.dir_path}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadSnapshot(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      applyUploadedSnapshot(JSON.parse(await file.text()), file.name);
+    } catch (err) {
+      setMessage(`上传失败：${err.message}`);
+    } finally {
+      e.target.value = '';
+    }
+  }
+
+  return (
+    <section className="resultsGrid">
+      <div className="panel resultPanel">
+        <h3><Save size={18} /> 保留本次结果</h3>
+        <div className="resultStats">
+          <span>问题 <b>{selectedCaseCount}</b></span>
+          <span>模型 <b>{selectedModelCount}</b></span>
+          <span>回答 <b>{visibleAnswers.length}</b></span>
+          <span>评分 <b>{visibleScores.length}</b></span>
+          <span>Badcase <b>{visibleBadcases.length}</b></span>
+        </div>
+        {selection?.judge_model && <p className="helperBar">评审模型：{selection.judge_model}</p>}
+        <button onClick={saveResult} disabled={saving || mode !== 'live'}><FolderOpen size={16} /> {saving ? '保存中...' : '保留到本地'}</button>
+      </div>
+
+      <div className="panel resultPanel">
+        <h3><Upload size={18} /> 上传评测结果</h3>
+        <label className="file uploadResult"><Upload size={16} /> 选择 snapshot.json<input type="file" accept=".json,application/json" onChange={uploadSnapshot} /></label>
+        <p className="summaryMeta">当前快照：{data.snapshot_at || (mode === 'live' ? '实时数据库' : '已加载文件')}</p>
+      </div>
+
+      <div className="card report resultReport">
+        <h3>当前报告预览</h3>
+        <pre>{data.report || '暂无报告'}</pre>
+      </div>
+    </section>
   );
 }
 
@@ -263,7 +797,7 @@ function Dashboard({ data, mode, setMessage, loadAll }) {
 
   async function refreshSummary() {
     if (mode !== 'live') {
-      setMessage('静态模式不能调用 Gemini，请在本地启动 FastAPI 后生成总结');
+      setMessage('只读快照模式不能调用模型，请在本地启动 FastAPI 后生成总结');
       return;
     }
     setSummarizing(true);
@@ -283,15 +817,15 @@ function Dashboard({ data, mode, setMessage, loadAll }) {
       </div>
       <div className="card summaryCard">
         <div className="summaryHead">
-          <h3><BrainCircuit size={18} /> Gemini 评测总结</h3>
+          <h3><BrainCircuit size={18} /> 评测总结</h3>
           <button className="secondary importantAction" onClick={refreshSummary} disabled={summarizing || mode !== 'live'}>
-            {summarizing ? '生成中...' : '生成 Gemini 总结'}
+            {summarizing ? '生成中...' : '生成评测总结'}
           </button>
         </div>
         <p className="summaryMeta">
           {data.analysis_summary?.model || 'local-fallback'} / {data.analysis_summary?.generated_at || '未生成'}
         </p>
-        <pre>{data.analysis_summary?.summary || '暂无总结。点击按钮后会调用 gemini-3.5-flash 分析全部评分、领域表现和 Badcase。'}</pre>
+        <pre>{data.analysis_summary?.summary || '暂无总结。点击按钮后会调用配置中的总结模型分析全部评分、领域表现和 Badcase。'}</pre>
       </div>
       <ChartCard title="各模型平均分" data={d.model_scores || []} useModelAlias />
       <ChartCard title="各场景平均分" data={d.scenario_scores || []} />
@@ -388,8 +922,8 @@ function ProjectGuide({ data }) {
           <p>评分前先执行硬规则：调用失败、超时、空回答、只输出工具调用/XML/JSON、需要实时工具却编造结果等，会直接被压低到 1-2 分并标记 Badcase。这样可以避免“语言流畅但事实或能力边界错误”的回答拿到虚高分。</p>
         </div>
         <div className="panel">
-          <h3><GitBranch size={18} /> GitHub 展示逻辑</h3>
-          <p>本地调试读实时 API；GitHub Pages 没有后端，所以读取 frontend/public/demo-data.json。点击“导出 GitHub 展示”会同步更新静态快照、docs/evaluation_report.md，以及 README 顶部的关键页面截图。</p>
+          <h3><GitBranch size={18} /> 快照展示逻辑</h3>
+          <p>本地调试读实时 API；历史评测可上传 snapshot.json 进入只读快照模式。快照会直接驱动总览图表、模型对比、Badcase 和报告展示，不需要重新运行模型。</p>
         </div>
       </div>
 
@@ -566,15 +1100,22 @@ function Cases({ data, mode, loadAll, setMessage }) {
   );
 }
 
-function Compare({ data, mode, loadAll, setMessage }) {
+function Compare({ data, config, mode, loadAll, setMessage }) {
   const [caseId, setCaseId] = useState('');
-  const [model, setModel] = useState('gpt-5.4');
+  const [model, setModel] = useState(config.default_answer_models?.[0] || data.models[0] || '');
   const [batching, setBatching] = useState(false);
   const selected = data.cases.find((c) => c.id === Number(caseId)) || data.cases[0];
   const answers = data.answers.filter((a) => selected && a.case_id === selected.id);
   const scoresByAnswer = useMemo(() => Object.fromEntries(data.scores.map((s) => [s.answer_id, s])), [data.scores]);
   const answeredCaseIds = useMemo(() => new Set(data.answers.map((a) => a.case_id)), [data.answers]);
   const unansweredCaseCount = data.cases.filter((c) => !answeredCaseIds.has(c.id)).length;
+
+  useEffect(() => {
+    if (!data.models.length) return;
+    if (!model || !data.models.includes(model)) {
+      setModel(config.default_answer_models?.find((item) => data.models.includes(item)) || data.models[0]);
+    }
+  }, [data.models, config.default_answer_models, model]);
 
   async function generate() {
     if (!selected || mode !== 'live') return;
@@ -585,7 +1126,7 @@ function Compare({ data, mode, loadAll, setMessage }) {
 
   async function autoJudge(answerId) {
     if (mode !== 'live') return;
-    await request('/api/scores/auto', { method: 'POST', body: JSON.stringify({ answer_id: answerId, judge_model: 'gpt-5.4' }) });
+    await request('/api/scores/auto', { method: 'POST', body: JSON.stringify({ answer_id: answerId, judge_model: config.default_judge_model || data.models[0] || '' }) });
     setMessage('已完成自动评分与 Badcase 判断');
     loadAll();
   }
@@ -600,8 +1141,8 @@ function Compare({ data, mode, loadAll, setMessage }) {
           model_names: data.models,
           replace_mock: true,
           auto_score: true,
-          judge_model: 'gpt-5.4',
-          max_workers: 4,
+          judge_model: config.default_judge_model || data.models[0] || '',
+          max_workers: config.max_workers || 4,
         }),
       });
       const scores = result.scores || {};
@@ -627,8 +1168,8 @@ function Compare({ data, mode, loadAll, setMessage }) {
           replace_mock: false,
           only_unanswered_cases: true,
           auto_score: true,
-          judge_model: 'gpt-5.4',
-          max_workers: 4,
+          judge_model: config.default_judge_model || data.models[0] || '',
+          max_workers: config.max_workers || 4,
         }),
       });
       const scores = result.scores || {};

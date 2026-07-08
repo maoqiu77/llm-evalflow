@@ -12,7 +12,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlmodel import Session, delete, select
 
-from .config import AVAILABLE_MODELS, settings
+from .config import (
+    RESULTS_DIR,
+    get_available_models,
+    get_llm_api_key,
+    get_llm_base_url,
+    get_summary_model,
+    normalize_runtime_config,
+    public_config,
+    save_runtime_config,
+    settings,
+    write_env_values,
+)
 from .database import create_db_and_tables, engine, get_session
 from .models import (
     Badcase,
@@ -27,7 +38,7 @@ from .models import (
     ScoreCreate,
 )
 from .services.archive import archive_size, get_archived_answer, load_archive, save_archived_answer
-from .services.llm import generate_answer, heuristic_judge, judge_answer
+from .services.llm import generate_answer, heuristic_judge, judge_answer, redact_secret, test_llm_connection
 from .services.showcase import ScreenshotExportError, run_readme_screenshot_export
 
 
@@ -63,6 +74,7 @@ class AutoJudgeRequest(BaseModel):
 
 
 class BatchGenerateRequest(BaseModel):
+    case_ids: Optional[list[int]] = None
     model_names: Optional[list[str]] = None
     prompt_version: str = "v1.0"
     system_prompt: str = ""
@@ -85,6 +97,31 @@ class ExportSnapshotRequest(BaseModel):
 
 class SummaryRequest(BaseModel):
     force_refresh: bool = False
+
+
+class ConfigUpdate(BaseModel):
+    base_url: str
+    api_key: Optional[str] = None
+    clear_api_key: bool = False
+    models: list[str]
+    default_answer_models: list[str] = []
+    default_judge_model: str = ""
+    summary_model: str = ""
+    max_workers: int = 4
+
+
+class ConfigTestRequest(BaseModel):
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model: str
+
+
+class ResultSaveRequest(BaseModel):
+    case_ids: Optional[list[int]] = None
+    model_names: Optional[list[str]] = None
+    judge_model: str = ""
+    run_result: Optional[dict[str, Any]] = None
+    note: str = ""
 
 
 SEED_CASES = [
@@ -206,7 +243,45 @@ def health() -> dict[str, str]:
 
 @app.get("/api/models")
 def models() -> dict[str, list[str]]:
-    return {"models": AVAILABLE_MODELS}
+    return {"models": get_available_models()}
+
+
+@app.get("/api/config")
+def get_config() -> dict[str, Any]:
+    return public_config()
+
+
+@app.put("/api/config")
+def update_config(payload: ConfigUpdate) -> dict[str, Any]:
+    runtime_config = normalize_runtime_config({
+        "models": payload.models,
+        "default_answer_models": payload.default_answer_models,
+        "default_judge_model": payload.default_judge_model,
+        "summary_model": payload.summary_model,
+        "max_workers": payload.max_workers,
+    })
+    save_runtime_config(runtime_config)
+
+    env_updates = {"LIAOBOTS_BASE_URL": payload.base_url.strip() or get_llm_base_url()}
+    if payload.clear_api_key:
+        env_updates["LIAOBOTS_API_KEY"] = ""
+    elif payload.api_key is not None and payload.api_key.strip():
+        env_updates["LIAOBOTS_API_KEY"] = payload.api_key.strip()
+    write_env_values(env_updates)
+    return public_config()
+
+
+@app.post("/api/config/test")
+def test_config(payload: ConfigTestRequest) -> dict[str, Any]:
+    api_key = payload.api_key if payload.api_key is not None and payload.api_key.strip() else get_llm_api_key()
+    base_url = payload.base_url.strip() if payload.base_url else get_llm_base_url()
+    try:
+        return test_llm_connection(base_url=base_url, api_key=api_key, model=payload.model.strip())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=redact_secret(str(exc), api_key),
+        ) from exc
 
 
 @app.post("/api/seed")
@@ -441,13 +516,22 @@ def generate_or_load_archived_answer(
 
 @app.post("/api/answers/batch-generate")
 def batch_generate_answers(payload: BatchGenerateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
-    cases = session.exec(select(EvalCase).order_by(EvalCase.id)).all()
-    model_names = payload.model_names or AVAILABLE_MODELS
+    selected_case_ids = set(payload.case_ids or [])
+    case_query = select(EvalCase).order_by(EvalCase.id)
+    cases = session.exec(case_query).all()
+    if selected_case_ids:
+        cases = [case for case in cases if case.id in selected_case_ids]
+    available_models = get_available_models()
+    model_names = payload.model_names or available_models
+    invalid_models = [model for model in model_names if model not in available_models]
+    if invalid_models:
+        raise HTTPException(status_code=400, detail=f"不支持的模型：{', '.join(invalid_models)}")
     answered_case_ids = {answer.case_id for answer in session.exec(select(ModelAnswer)).all()}
     skipped = 0
     skipped_cases = 0
     tasks = []
     existing_by_key = {}
+    existing_answer_ids_for_scoring: set[int] = set()
     results = []
 
     for case in cases:
@@ -464,6 +548,8 @@ def batch_generate_answers(payload: BatchGenerateRequest, session: Session = Dep
                 )
             ).first()
             if existing and not (payload.replace_mock and answer_is_mock(existing)):
+                if payload.auto_score and existing.id is not None:
+                    existing_answer_ids_for_scoring.add(existing.id)
                 skipped += 1
                 continue
             existing_by_key[(case.id, model_name)] = existing
@@ -545,10 +631,12 @@ def batch_generate_answers(payload: BatchGenerateRequest, session: Session = Dep
 
     score_result = {"created": 0, "skipped": 0, "failed": 0, "badcases": 0}
     if payload.auto_score:
+        answer_ids_for_scoring = {item["answer_id"] for item in results} | existing_answer_ids_for_scoring
         score_result = create_auto_scores(
             session=session,
             judge_model=payload.judge_model,
             only_unscored=True,
+            answer_ids=answer_ids_for_scoring,
         )
 
     return {
@@ -693,8 +781,11 @@ def create_auto_scores(
     session: Session,
     judge_model: str = "gpt-5.4",
     only_unscored: bool = True,
+    answer_ids: Optional[set[int]] = None,
 ) -> dict[str, Any]:
     answers = session.exec(select(ModelAnswer).order_by(ModelAnswer.id)).all()
+    if answer_ids is not None:
+        answers = [answer for answer in answers if answer.id in answer_ids]
     scored_answer_ids = {s.answer_id for s in session.exec(select(Score)).all()}
     case_by_id = {c.id: c for c in session.exec(select(EvalCase)).all()}
     jobs = []
@@ -815,12 +906,28 @@ def create_prompt(payload: PromptVersionCreate, session: Session = Depends(get_s
     return item
 
 
-@app.get("/api/dashboard")
-def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
+def build_dashboard_data(
+    session: Session,
+    *,
+    case_ids: Optional[set[int]] = None,
+    model_names: Optional[set[str]] = None,
+) -> dict[str, Any]:
     cases = session.exec(select(EvalCase)).all()
+    if case_ids is not None:
+        cases = [case for case in cases if case.id in case_ids]
+    case_id_set = {case.id for case in cases}
     answers = session.exec(select(ModelAnswer)).all()
-    scores = session.exec(select(Score)).all()
-    badcases = session.exec(select(Badcase)).all()
+    answers = [
+        answer for answer in answers
+        if answer.case_id in case_id_set and (model_names is None or answer.model_name in model_names)
+    ]
+    answer_id_set = {answer.id for answer in answers}
+    scores = [score for score in session.exec(select(Score)).all() if score.answer_id in answer_id_set]
+    score_id_set = {score.id for score in scores}
+    badcases = [
+        badcase for badcase in session.exec(select(Badcase)).all()
+        if badcase.answer_id in answer_id_set and badcase.score_id in score_id_set
+    ]
 
     score_by_answer = {s.answer_id: s for s in scores}
     case_by_id = {c.id: c for c in cases}
@@ -837,7 +944,7 @@ def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
             if case:
                 scenario_scores[case.scenario].append(score.total_score)
 
-    expected_model_count = len(AVAILABLE_MODELS)
+    expected_model_count = len(model_names) if model_names is not None else len(get_available_models())
     completed_case_count = 0
     unanswered_case_count = 0
     for case in cases:
@@ -871,11 +978,33 @@ def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
     }
 
 
-def build_summary_metrics(session: Session) -> dict[str, Any]:
+@app.get("/api/dashboard")
+def dashboard(session: Session = Depends(get_session)) -> dict[str, Any]:
+    return build_dashboard_data(session)
+
+
+def build_summary_metrics(
+    session: Session,
+    *,
+    case_ids: Optional[set[int]] = None,
+    model_names: Optional[set[str]] = None,
+) -> dict[str, Any]:
     cases = session.exec(select(EvalCase)).all()
+    if case_ids is not None:
+        cases = [case for case in cases if case.id in case_ids]
+    case_id_set = {case.id for case in cases}
     answers = session.exec(select(ModelAnswer)).all()
-    scores = session.exec(select(Score)).all()
-    badcases = session.exec(select(Badcase)).all()
+    answers = [
+        answer for answer in answers
+        if answer.case_id in case_id_set and (model_names is None or answer.model_name in model_names)
+    ]
+    answer_id_set = {answer.id for answer in answers}
+    scores = [score for score in session.exec(select(Score)).all() if score.answer_id in answer_id_set]
+    score_id_set = {score.id for score in scores}
+    badcases = [
+        badcase for badcase in session.exec(select(Badcase)).all()
+        if badcase.answer_id in answer_id_set and badcase.score_id in score_id_set
+    ]
     case_by_id = {case.id: case for case in cases}
     answer_by_id = {answer.id: answer for answer in answers}
     score_by_answer = {score.answer_id: score for score in scores}
@@ -1006,10 +1135,11 @@ def generate_analysis_summary(
             cached["cached"] = True
             return cached
     metrics = build_summary_metrics(session)
-    result = generate_answer("gemini-3.5-flash", build_summary_prompt(metrics))
+    summary_model = get_summary_model()
+    result = generate_answer(summary_model, build_summary_prompt(metrics))
     summary_text = result["answer"] if not result.get("mock") else build_fallback_summary(metrics)
     summary = {
-        "model": "gemini-3.5-flash" if not result.get("mock") else "local-fallback",
+        "model": summary_model if not result.get("mock") else "local-fallback",
         "summary": summary_text,
         "metrics": metrics,
         "cached": False,
@@ -1020,9 +1150,13 @@ def generate_analysis_summary(
     return summary
 
 
-@app.get("/api/report")
-def report(session: Session = Depends(get_session)) -> dict[str, str]:
-    data = dashboard(session)
+def build_report_markdown(
+    session: Session,
+    *,
+    case_ids: Optional[set[int]] = None,
+    model_names: Optional[set[str]] = None,
+) -> str:
+    data = build_dashboard_data(session, case_ids=case_ids, model_names=model_names)
     lines = [
         "# 大模型问答评测与 Badcase 归因报告",
         "",
@@ -1046,24 +1180,106 @@ def report(session: Session = Depends(get_session)) -> dict[str, str]:
         "- 对信息遗漏类问题沉淀结构化答案模板，提升步骤完整性。",
         "- 对工具调用类问题增加不可编造约束和澄清机制。",
     ]
-    return {"markdown": "\n".join(lines)}
+    return "\n".join(lines)
 
 
-def build_snapshot(session: Session) -> dict[str, Any]:
+@app.get("/api/report")
+def report(session: Session = Depends(get_session)) -> dict[str, str]:
+    return {"markdown": build_report_markdown(session)}
+
+
+def build_snapshot(
+    session: Session,
+    *,
+    case_ids: Optional[set[int]] = None,
+    model_names: Optional[set[str]] = None,
+    judge_model: str = "",
+    run_result: Optional[dict[str, Any]] = None,
+    note: str = "",
+) -> dict[str, Any]:
+    cases = session.exec(select(EvalCase).order_by(EvalCase.id.desc())).all()
+    if case_ids is not None:
+        cases = [case for case in cases if case.id in case_ids]
+    case_id_set = {case.id for case in cases}
+
+    answers = session.exec(select(ModelAnswer).order_by(ModelAnswer.id.desc())).all()
+    answers = [
+        answer for answer in answers
+        if answer.case_id in case_id_set and (model_names is None or answer.model_name in model_names)
+    ]
+    answer_id_set = {answer.id for answer in answers}
+    scores = [score for score in session.exec(select(Score).order_by(Score.id.desc())).all() if score.answer_id in answer_id_set]
+    score_id_set = {score.id for score in scores}
+    badcases = [
+        badcase for badcase in session.exec(select(Badcase).order_by(Badcase.id.desc())).all()
+        if badcase.answer_id in answer_id_set and badcase.score_id in score_id_set
+    ]
+    dashboard_data = build_dashboard_data(session, case_ids=case_id_set, model_names=model_names)
+    metrics = build_summary_metrics(session, case_ids=case_id_set, model_names=model_names)
+    filtered = case_ids is not None or model_names is not None
+    analysis_summary = (
+        {
+            "model": "local-fallback",
+            "summary": build_fallback_summary(metrics),
+            "metrics": metrics,
+            "cached": False,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        if filtered
+        else get_analysis_summary(session)
+    )
     snapshot = {
         "snapshot_at": datetime.utcnow().isoformat() + "Z",
         "mode": "static-snapshot",
-        "models": AVAILABLE_MODELS,
-        "cases": session.exec(select(EvalCase).order_by(EvalCase.id.desc())).all(),
-        "answers": session.exec(select(ModelAnswer).order_by(ModelAnswer.id.desc())).all(),
-        "scores": session.exec(select(Score).order_by(Score.id.desc())).all(),
-        "badcases": session.exec(select(Badcase).order_by(Badcase.id.desc())).all(),
+        "models": sorted(model_names) if model_names is not None else get_available_models(),
+        "selection": {
+            "case_ids": sorted(case_id_set),
+            "model_names": sorted(model_names) if model_names is not None else get_available_models(),
+            "judge_model": judge_model,
+            "note": note,
+        },
+        "config_summary": {
+            "base_url": get_llm_base_url(),
+            "has_api_key": bool(get_llm_api_key()),
+            "models": get_available_models(),
+        },
+        "run_result": run_result or {},
+        "cases": cases,
+        "answers": answers,
+        "scores": scores,
+        "badcases": badcases,
         "prompts": session.exec(select(PromptVersion).order_by(PromptVersion.id.desc())).all(),
-        "dashboard": dashboard(session),
-        "analysis_summary": get_analysis_summary(session),
-        "report": report(session)["markdown"],
+        "dashboard": dashboard_data,
+        "analysis_summary": analysis_summary,
+        "report": build_report_markdown(session, case_ids=case_id_set, model_names=model_names),
     }
     return jsonable_encoder(snapshot)
+
+
+def make_result_dir() -> Path:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = RESULTS_DIR / f"评测结果-{stamp}"
+    suffix = 2
+    while path.exists():
+        path = RESULTS_DIR / f"评测结果-{stamp}-{suffix}"
+        suffix += 1
+    path.mkdir(parents=True)
+    return path
+
+
+def write_result_snapshot(snapshot: dict[str, Any]) -> dict[str, str]:
+    result_dir = make_result_dir()
+    snapshot_path = result_dir / "snapshot.json"
+    report_path = result_dir / "evaluation_report.md"
+    snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(snapshot["report"], encoding="utf-8")
+    return {
+        "dir_name": result_dir.name,
+        "dir_path": str(result_dir),
+        "snapshot_path": str(snapshot_path),
+        "report_path": str(report_path),
+    }
 
 
 def write_snapshot_files(snapshot: dict[str, Any]) -> dict[str, str]:
@@ -1082,6 +1298,29 @@ def write_snapshot_files(snapshot: dict[str, Any]) -> dict[str, str]:
 @app.get("/api/snapshot")
 def get_snapshot(session: Session = Depends(get_session)) -> dict[str, Any]:
     return build_snapshot(session)
+
+
+@app.post("/api/results/save")
+def save_result(payload: ResultSaveRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    case_ids = set(payload.case_ids or []) or None
+    model_names = set(payload.model_names or []) or None
+    snapshot = build_snapshot(
+        session,
+        case_ids=case_ids,
+        model_names=model_names,
+        judge_model=payload.judge_model,
+        run_result=payload.run_result,
+        note=payload.note,
+    )
+    files = write_result_snapshot(snapshot)
+    return {
+        "ok": True,
+        "case_count": len(snapshot["cases"]),
+        "answer_count": len(snapshot["answers"]),
+        "score_count": snapshot["dashboard"]["score_count"],
+        "badcase_count": len(snapshot["badcases"]),
+        "files": files,
+    }
 
 
 @app.post("/api/export/github-snapshot")

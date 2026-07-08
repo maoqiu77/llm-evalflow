@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import re
 import time
@@ -5,24 +7,26 @@ from typing import Any, Optional
 
 from openai import OpenAI
 
-from ..config import AVAILABLE_MODELS, settings
+from ..config import get_available_models, get_llm_api_key, get_llm_base_url, settings
 
 DEFAULT_JUDGE_MODEL = "gpt-5.4"
 BACKUP_JUDGE_MODEL = "gemini-3.5-flash"
 
 
-def get_client() -> Optional[OpenAI]:
-    if not settings.liaobots_api_key:
+def get_client(api_key: str | None = None, base_url: str | None = None) -> Optional[OpenAI]:
+    resolved_api_key = api_key if api_key is not None else get_llm_api_key()
+    resolved_base_url = base_url or get_llm_base_url()
+    if not resolved_api_key:
         return None
     return OpenAI(
-        api_key=settings.liaobots_api_key,
-        base_url=settings.liaobots_base_url,
+        api_key=resolved_api_key,
+        base_url=resolved_base_url,
         timeout=settings.llm_timeout_seconds,
     )
 
 
 def generate_answer(model: str, question: str, system_prompt: str = "") -> dict[str, Any]:
-    if model not in AVAILABLE_MODELS:
+    if model not in get_available_models():
         raise ValueError(f"不支持的模型：{model}")
 
     started = time.perf_counter()
@@ -106,8 +110,37 @@ Badcase 类型只能从以下枚举选择：事实错误、答非所问、信息
 
 def resolve_judge_model(requested_model: str, answer_model: str = "") -> str:
     if answer_model and requested_model == answer_model:
-        return BACKUP_JUDGE_MODEL
+        for model in get_available_models():
+            if model != answer_model:
+                return model
+        if BACKUP_JUDGE_MODEL != answer_model:
+            return BACKUP_JUDGE_MODEL
     return requested_model or DEFAULT_JUDGE_MODEL
+
+
+def redact_secret(text: str, *secrets: str) -> str:
+    safe = text
+    for secret in secrets:
+        if secret:
+            safe = safe.replace(secret, "[已移除 API key]")
+    return safe
+
+
+def test_llm_connection(*, base_url: str, api_key: str, model: str) -> dict[str, Any]:
+    if not api_key:
+        raise ValueError("请先填写 API Key。")
+    if not model:
+        raise ValueError("请先选择测试模型。")
+    client = get_client(api_key=api_key, base_url=base_url)
+    if client is None:
+        raise ValueError("请先填写 API Key。")
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": "请只回复 ok，用于测试接口连通性。"}],
+        max_tokens=8,
+    )
+    text = resp.choices[0].message.content or ""
+    return {"ok": True, "model": model, "message": text.strip()[:100]}
 
 
 def extract_json(text: str) -> str:

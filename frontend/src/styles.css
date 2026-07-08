@@ -22,6 +22,7 @@ button:disabled, .file.disabled { opacity: 0.55; cursor: not-allowed; }
 .sidebar button.active, .sidebar button:hover { background: #1f2937; color: white; }
 .secondary { background: #e5e7eb; color: #111827; }
 .sidebar .secondary { background: #374151; color: #f9fafb; }
+.sidebarUpload { justify-content: flex-start; }
 .main { padding: 28px; background: radial-gradient(circle at top right, rgba(20, 184, 166, 0.14), transparent 32%), #f4f6f8; }
 header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
 h2 { font-size: 28px; }
@@ -100,12 +101,45 @@ textarea { min-height: 120px; resize: vertical; }
 .flowStep b, .dimensionGrid b { color: #0f172a; }
 .dimensionGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .dimensionGrid div { border-left: 3px solid #2563eb; background: #f8fafc; border-radius: 8px; padding: 12px; }
+.configGrid { display: grid; grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 1.05fr); gap: 16px; align-items: start; }
+.configPanel { display: grid; gap: 12px; }
+.wideConfig { grid-column: 1 / -1; }
+.buttonRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.modelAdd { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.modelList { display: grid; gap: 8px; max-height: 330px; overflow: auto; }
+.modelChip { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid #e5e7eb; background: #f8fafc; border-radius: 8px; padding: 9px 10px; }
+.modelChip span { overflow-wrap: anywhere; font-weight: 700; color: #1f2937; }
+.checkboxGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.checkLine { display: flex; align-items: center; gap: 9px; color: #334155; line-height: 1.35; }
+.checkLine input { width: auto; flex: 0 0 auto; }
+.checkLine span { overflow-wrap: anywhere; }
+.smallControl { max-width: 140px; }
+.runLayout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr); gap: 16px; align-items: start; }
+.runPanel { display: grid; gap: 12px; }
+.sideStack { display: grid; gap: 16px; }
+.tripleFilters { grid-template-columns: minmax(220px, 1fr) 170px 120px; }
+.casePicker { display: grid; gap: 8px; max-height: 620px; overflow: auto; padding-right: 2px; }
+.casePick { display: grid; justify-content: stretch; text-align: left; gap: 6px; color: #1f2937; background: #f8fafc; border: 1px solid #e5e7eb; }
+.casePick:hover { border-color: #93c5fd; background: #eff6ff; }
+.casePick.selected { border-color: #2563eb; background: #dbeafe; }
+.casePick span { color: #64748b; font-size: 13px; }
+.casePick b { font-weight: 700; line-height: 1.45; }
+.compactChecks { grid-template-columns: 1fr; max-height: 260px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; background: #f8fafc; }
+.runButton { width: 100%; padding: 12px 14px; }
+.resultsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.resultPanel { display: grid; gap: 12px; }
+.resultStats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.resultStats span { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; color: #64748b; }
+.resultStats b { display: block; color: #0f172a; font-size: 22px; margin-top: 4px; }
+.uploadResult { justify-content: center; min-height: 86px; border: 1px dashed #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.resultReport { grid-column: 1 / -1; }
 
 @media (max-width: 920px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position: static; }
-  .grid, .two, .guideHero, .guideGrid, .flowSteps, .dimensionGrid { grid-template-columns: 1fr; }
+  .grid, .two, .guideHero, .guideGrid, .flowSteps, .dimensionGrid, .configGrid, .runLayout, .resultsGrid { grid-template-columns: 1fr; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   header, .toolbar, .summaryHead { flex-direction: column; align-items: stretch; }
-  .filters { grid-template-columns: 1fr; }
+  .filters, .tripleFilters, .modelAdd { grid-template-columns: 1fr; }
+  .wideConfig, .resultReport { grid-column: auto; }
 }
